@@ -1,0 +1,253 @@
+from sqlite3 import IntegrityError
+import sqlite3
+from flask import Flask, session,request, jsonify, render_template
+from flask_sqlalchemy import SQLAlchemy
+from flask_bcrypt import Bcrypt
+from flask_jwt_extended import JWTManager, create_access_token
+from flask_session import Session
+import pyotp
+import qrcode
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///storage.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = 'your_jwt_secret_key'
+
+app.config['SECRET_KEY'] = 'xuzhuoning'
+app.config['SESSION_TYPE'] = 'filesystem'  # Options: 'filesystem', 'redis', 'memcached', etc.
+app.config['SESSION_PERMANENT'] = False
+app.config['SESSION_USE_SIGNER'] = True  # To sign session cookies for extra security
+app.config['SESSION_FILE_DIR'] = './sessions'  # Needed if using filesystem type
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True 
+app.config['SESSION_COOKIE_SAMESITE'] = 'strict'
+db = SQLAlchemy(app)
+bcrypt = Bcrypt(app)
+jwt = JWTManager(app)
+Session(app)
+# 数据库模型
+class User(db.Model):
+    username = db.Column(db.String(80), unique=True, primary_key=True)
+    password = db.Column(db.String(200), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    role = db.Column(db.String(20), nullable=False)
+    otp_secret=db.Column(db.String(120), unique=True, nullable=False)
+    mfa_enabled = db.Column(db.Boolean, default=False)  # 是否启用 MFA
+    def __repr__(self):
+        return f'<User {self.username}>'
+with app.app_context():
+    db.create_all()
+# 首页
+@app.route('/')
+def hello():
+    return render_template('login.html')
+@app.route('/login')
+def login_page():
+    return render_template('login.html')
+# 注册页面
+@app.route('/register')
+def registerhtml():
+    return render_template('register.html')
+# 注册页面
+@app.route('/register_spqce', methods=['POST'])  # Check if URL should be '/register_space'
+def register():
+    if request.method == 'POST':
+        # Add repassword retrieval
+        username = request.form.get('userid')
+        password = request.form.get('password')
+        repassword = request.form.get('repassword')  # Added missing field
+        email = request.form.get('email')
+        role = request.form.get('role')
+
+        # Validate all required fields
+        if not all([username, password, repassword, email, role]):
+            return jsonify({'status': 'error', 'message': 'All fields are required!'}), 400
+            
+        if password != repassword:
+            return jsonify({'status': 'error', 'message': 'Passwords do not match!'}), 400
+            
+        if role not in ['user', 'admin']:
+            return jsonify({'status': 'error', 'message': 'Invalid role selected!'}), 400
+        
+        otp_secret, provisioning_uri= generate_otp(username)
+
+        # Remove non-existent gender field
+        new_user = User(
+            username=username,
+            password=bcrypt.generate_password_hash(password).decode('utf-8'),
+            email=email,
+            role=role,  # Removed undefined gender parameter
+            otp_secret=otp_secret
+        )      
+        # Add error handling for DB operations
+        try:
+             # 生成 OTP 并保存密钥
+            db.session.add(new_user)
+            db.session.commit()
+            session['username'] = username
+            session['provisioning_uri'] = provisioning_uri
+            session['otp_secret'] = otp_secret
+            return jsonify({'status': 'success',
+                            'message': 'Registration successful!',
+                            'provisioning_uri': provisioning_uri})
+        except:
+            db.session.rollback()
+            return jsonify({'status': 'error', 'message': 'Username/email already exists!'}), 400
+
+# 登录页面
+@app.route('/login_check', methods=['POST'])
+def login():
+    if request.method == 'POST':
+        # Match frontend field names
+        username = request.form.get('username')  # Changed from 'userid'
+        password = request.form.get('password')
+
+        if not username or not password:
+            return jsonify({
+                "status": "error",
+                "message": "Both fields are required"
+            }), 400
+
+        try:
+            user = User.query.filter_by(username=username).first()
+            
+            # Enhanced password verification
+            if user and bcrypt.check_password_hash(user.password, password):
+                # Return complete user data
+                access_token = create_access_token(identity={
+                    "username": user.username,
+                    "role": user.role,
+                    "email": user.email
+                })
+                return jsonify({
+                    "status": "success",
+                    "message": "Login successful",
+                    "user": {
+                        "username": user.username,
+                        "role": user.role,
+                        "email": user.email
+                    },
+                    "access_token": access_token
+                }), 200
+            
+            return jsonify({
+                "status": "error",
+                "message": "Invalid credentials"
+            }), 401
+
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": "Server error"
+            }), 500
+def generate_otp(user):
+    # 生成随机密钥
+    otp_secret = pyotp.random_base32()
+    
+    # 构建标准URI
+    provisioning_uri = pyotp.totp.TOTP(otp_secret).provisioning_uri(
+        name=user,
+        issuer_name="Your App Name"
+    )
+    
+    # 生成二维码图像
+    qr = qrcode.make(provisioning_uri)
+    
+    return otp_secret, provisioning_uri
+
+@app.route('/findpassword_page')
+def findpassword_page():
+    return render_template(
+        'find_password.html'
+    )
+@app.route('/otp', methods=['GET'])
+def otp_page():
+    return render_template(
+        'otp_setting.html',
+        username = session.get('username'),
+        provisioning_uri = session.get('provisioning_uri')
+    )
+@app.route('/otp_setting', methods=['GET', 'POST'])
+def otp_setting():
+    error = None
+    username = session.get('username')
+    provisioning_uri = session.get('provisioning_uri')
+    otp_secret = session.get('otp_secret')
+
+    if not username or not provisioning_uri or not otp_secret:
+        # 如果 session 信息缺失，提示用户重新登录或注册
+        return jsonify({'status': 'error', 'message': 'Session expired, please log in again.'}), 400
+
+    if request.method == 'POST':
+        try:
+            otp = request.form.get('otp')  # 获取用户输入的 OTP
+            if not otp:
+                error = 'OTP is required!'
+                raise ValueError(error)
+
+            # 验证用户输入的 OTP
+            totp = pyotp.TOTP(otp_secret)
+            if totp.verify(otp):  # 验证 OTP 是否正确
+                # 更新数据库，启用 MFA
+                user = User.query.filter_by(username=username).first()
+                if user:
+                    user.mfa_enabled = True  # 假设 User 模型有 mfa_enabled 字段
+                    db.session.commit()
+                    return jsonify({'status': 'success', 'message': 'OTP setup successful!'})
+                else:
+                    error = 'User not found!'
+                    raise ValueError(error)
+            else:
+                error = 'Invalid OTP!'
+        except Exception as e:
+            error = f'Error adding OTP: {str(e)}'
+        finally:
+            db.session.rollback()  # 确保数据库操作回滚
+
+    # 返回设置 OTP 的页面
+    return jsonify({'status': 'error', 'message': error}), 400
+
+
+@app.route('/reset-password', methods=['POST'])
+def reset_password():
+    try:
+        # 获取表单数据
+        username = request.form.get('username')
+        email = request.form.get('email')
+        otp = request.form.get('otp')
+        new_password = request.form.get('newPassword')
+        confirm_password = request.form.get('confirmPassword')
+
+        # 验证输入是否完整
+        if not all([username, email, otp, new_password, confirm_password]):
+            return jsonify({'status': 'error', 'message': 'All fields are required!'}), 400
+
+        # 验证新密码和确认密码是否一致
+        if new_password != confirm_password:
+            return jsonify({'status': 'error', 'message': 'Passwords do not match!'}), 400
+
+        # 查找用户
+        user = User.query.filter_by(username=username, email=email).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found!'}), 404
+
+        # 验证 OTP
+        totp = pyotp.TOTP(user.otp_secret)
+        if not totp.verify(otp):
+            return jsonify({'status': 'error', 'message': 'Invalid OTP!'}), 400
+
+        # 更新密码
+        hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
+        user.password = hashed_password
+        db.session.commit()
+
+        return jsonify({'status': 'success', 'message': 'Password reset successful!'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': f'Error resetting password: {str(e)}'}), 500
+
+if __name__ == '__main__':
+    # 确保在应用上下文中创建数据库
+    with app.app_context():
+        db.create_all()
+    app.run(debug=True)
