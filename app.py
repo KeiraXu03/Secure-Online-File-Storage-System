@@ -444,6 +444,30 @@ def decrypt_file(encrypted_data, private_key_pem):
     except Exception as e:
         raise ValueError(f"Error decrypting file: {str(e)}")
 
+# 删除文件的 API
+@app.route('/delete_file/<fileid>', methods=['POST'])
+def delete_file(fileid):
+    fileid=generate_file_id(session.get('username'), fileid)
+    # 查找文件
+    file = files.query.filter_by(fileid=fileid).first()
+    if not file:
+        return jsonify({'error': 'Permission denied'}), 404
+
+    # 验证权限：只有文件的 owner 可以删除
+    if file.owner != hashlib.sha256(session.get('username').encode()).hexdigest():
+        return jsonify({'error': 'Permission denied'}), 403
+
+    try:
+        # 删除文件记录
+        os.remove(file.file_path)  # 删除文件
+        db.session.delete(file)
+        db.session.commit()
+        return jsonify({'message': 'File deleted successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': 'Failed to delete file', 'details': str(e)}), 500
+
+
+
 if __name__ == '__main__':
     # 确保在应用上下文中创建数据库
     with app.app_context():

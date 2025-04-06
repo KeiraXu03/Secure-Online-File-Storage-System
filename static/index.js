@@ -46,7 +46,7 @@ $(document).ready(function () {
                                 <button id="share" class="btn btn-primary">share</button>
                             </div>
                             <div class="col-3">
-                                <button id="query" class="btn btn-primary">delete</button>
+                                <button id="query" class="btn btn-primary" onclick="deleteFile('${file.filename}')">delete</button>
                             </div>
                         <div>
                         
@@ -97,4 +97,25 @@ function downloadFile(filename) {
 
     // 释放 URL 对象资源
     URL.revokeObjectURL(link.href);
+}
+function deleteFile(fileid) {
+    const formData = new FormData();
+    formData.append('username', "test");
+    // 使用 jQuery AJAX 发送 DELETE 请求
+    $.ajax({
+        url: `/delete_file/${fileid}`, // 后端 API 路径
+        method: 'POST',
+        data: formData,
+        processData: false,
+        contentType: false,
+        success: function (response) {
+            alert(response.message);
+            // 更新前端 UI：移除文件列表中的文件
+            $(`#file-${fileid}`).remove();
+        },
+        error: function (xhr) {
+            const error = xhr.responseJSON;
+            alert(`Error: ${error.error || 'Failed to delete file'}`);
+        }
+    });
 }
