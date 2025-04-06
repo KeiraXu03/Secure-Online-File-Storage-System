@@ -359,6 +359,48 @@ def generate_file_id(username, filename):
     return hashlib.sha256(unique_string.encode()).hexdigest()
 
 
+@app.route('/query_file', methods=['POST'])
+def handle_file_query():
+    try:
+        filename = request.form.get('filename')
+        otp = request.form.get('otp')
+        username=session.get('username')
+        user = User.query.filter_by(username).first()
+        otp_secret = user.otp_secret
+
+        totp = pyotp.TOTP(otp_secret)
+        if not totp.verify(otp):
+            return jsonify({'status': 'error', 'message': 'Invalid OTP!'})
+
+        # Hash filename and username
+        hashed_filename = hashlib.sha256(filename.encode()).hexdigest()
+        hashed_owner = hashlib.sha256(username.encode()).hexdigest()
+        filesid = generate_file_id(username, filename)
+        # Query file information
+        file_entry = files.query.filter_by(filesid).first()
+        if not file_entry:
+            return jsonify({'status': 'error', 'message': 'File not found!'})
+
+        # Check ownership or sharing permissions
+        if file_entry.owner == hashed_owner or username in file_entry.share_to.split(','):
+            # Return file content
+            file_content = file_entry.content  # Assuming `content` holds the file data
+            return jsonify({'status': 'success', 
+                            'file': {
+                                'filename': filename,
+                                'owner': username,
+                                'file_size': file_entry.file_size,
+                                'file_content': file_content
+                            }})
+        else:
+            return jsonify({'status': 'error', 'message': 'Access denied!'})
+
+    except Exception as e:
+        # Handle exceptions and return error messages
+        return jsonify({'status': 'error', 'message': f'Error processing request: {str(e)}'})
+
+
+
 if __name__ == '__main__':
     # 确保在应用上下文中创建数据库
     with app.app_context():
