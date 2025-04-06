@@ -365,7 +365,7 @@ def handle_file_query():
         filename = request.form.get('filename')
         otp = request.form.get('otp')
         username=session.get('username')
-        user = User.query.filter_by(username).first()
+        user = User.query.filter_by(username=username).first()
         otp_secret = user.otp_secret
 
         totp = pyotp.TOTP(otp_secret)
@@ -377,7 +377,7 @@ def handle_file_query():
         hashed_owner = hashlib.sha256(username.encode()).hexdigest()
         filesid = generate_file_id(username, filename)
         # Query file information
-        file_entry = files.query.filter_by(filesid).first()
+        file_entry = files.query.filter_by(fileid=filesid).first()
         if not file_entry:
             return jsonify({'status': 'error', 'message': 'File not found!'})
 

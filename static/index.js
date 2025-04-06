@@ -1,16 +1,11 @@
 $(document).ready(function () {
-    console.log("submit")
     // Unified form submission handler
     // Frontend JavaScript
     $('#query').on('click', function(event){
-        alert("query");
-        console.log("test")
         event.preventDefault();
         
         const filename = document.getElementById('filename').value;
         const otp = $('#otp').val().trim();
-        console.log("filename", filename)
-        console.log("otp", otp)
         const formData = new FormData();
         formData.append('filename', filename);
         formData.append('otp', otp);
