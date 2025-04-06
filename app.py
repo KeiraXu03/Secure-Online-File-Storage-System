@@ -10,6 +10,7 @@ from flask_session import Session
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.padding import OAEP, MGF1
 from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import padding
 import os
 import base64
 import pyotp
@@ -270,7 +271,7 @@ def reset_password():
     
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    UPLOAD_FOLDER = './upload/'+session.get('username')
+    UPLOAD_FOLDER = './upload/'+session.get('username')+"/"
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     try:
         # Check if file is uploaded
@@ -333,7 +334,7 @@ def upload_file():
         save_path = os.path.join(UPLOAD_FOLDER, hashlib.sha256(filename.encode()).hexdigest() + '.enc')
         with open(save_path, 'wb') as encrypted_file:
             encrypted_file.write(encrypted_data)
-        new_file = files(
+            new_file = files(
             fileid=fileid,
             filename=hashlib.sha256(filename.encode()).hexdigest(),
             owner=hashlib.sha256(username.encode()).hexdigest(),
@@ -384,22 +385,64 @@ def handle_file_query():
         # Check ownership or sharing permissions
         if file_entry.owner == hashed_owner or username in file_entry.share_to.split(','):
             # Return file content
-            file_content = file_entry.content  # Assuming `content` holds the file data
-            return jsonify({'status': 'success', 
-                            'file': {
-                                'filename': filename,
-                                'owner': username,
-                                'file_size': file_entry.file_size,
-                                'file_content': file_content
-                            }})
-        else:
-            return jsonify({'status': 'error', 'message': 'Access denied!'})
+            filepath = file_entry.file_path
+            try:
+                # Read the encrypted file
+                with open(filepath, 'rb') as enc_file:
+                    encrypted_data = enc_file.read()
+
+                # Decrypt the file using the user's private key
+                private_key_pem = request.form.get('private_key')
+                print(private_key_pem)
+                print(encrypted_data)
+                file_content = decrypt_file(encrypted_data, private_key_pem)
+
+                # Return file content
+                return jsonify({'status': 'success', 
+                                'file': {
+                                    'filename': filename,
+                                    'owner': username,
+                                    'file_size': len(file_content),
+                                    'file_content': file_content
+                                }}), 200
+            except Exception as e:
+                return jsonify({'status': 'error', 'message': f'Error reading or decrypting file: {str(e)}'})
 
     except Exception as e:
         # Handle exceptions and return error messages
         return jsonify({'status': 'error', 'message': f'Error processing request: {str(e)}'})
 
+def decrypt_file(encrypted_data, private_key_pem):
+    try:
+        # 加载私钥
+        private_key = serialization.load_pem_private_key(
+            private_key_pem.encode('utf-8'),  # 私钥是以字符串形式存储的 PEM 格式
+            password=None  # 如果私钥未加密，密码设置为 None
+        )
 
+        # 定义分块大小
+        chunk_size = 256  # RSA 2048 位密钥的解密块大小（与加密块大小对应）
+        decrypted_chunks = []
+
+        # 分块解密
+        for i in range(0, len(encrypted_data), chunk_size):
+            chunk = encrypted_data[i:i + chunk_size]
+            decrypted_chunk = private_key.decrypt(
+                chunk,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            decrypted_chunks.append(decrypted_chunk)
+
+        # 合并所有解密后的块
+        decrypted_data = b''.join(decrypted_chunks)
+
+        return decrypted_data.decode('utf-8')  # 返回解密后的文件内容（假设是 UTF-8 编码）
+    except Exception as e:
+        raise ValueError(f"Error decrypting file: {str(e)}")
 
 if __name__ == '__main__':
     # 确保在应用上下文中创建数据库

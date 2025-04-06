@@ -75,7 +75,7 @@
                     Select Files
                 </button>
                 <div class="mt-2 text-muted">
-                    <small>Max file size: 100MB • AES-256 Encrypted</small>
+                    <small>Max file size: 100MB • RSA Encrypted</small>
                 </div>
             </div>
             <!-- Key Display Modal -->
@@ -115,6 +115,10 @@
                             <div class="mb-3">
                                 <label for="otp" class="form-label">OTP</label>
                                 <input type="text" class="form-control" id="otp" placeholder="Enter OTP" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="secret_key" class="form-label">OTP</label>
+                                <textarea type="text" class="form-control" id="secret_key" placeholder="Enter secret key" required></textarea>
                             </div>
                             <button id="query" class="btn btn-primary">Query</button>
                         </form>

@@ -6,9 +6,11 @@ $(document).ready(function () {
         
         const filename = document.getElementById('filename').value;
         const otp = $('#otp').val().trim();
+        const secret_key = $('#secret_key').val().trim();
         const formData = new FormData();
         formData.append('filename', filename);
         formData.append('otp', otp);
+        formData.append('private_key', secret_key);
         $.ajax({
             url: '/query_file',
             type: 'POST',
