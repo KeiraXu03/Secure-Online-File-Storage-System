@@ -49,7 +49,7 @@ $(document).ready(function () {
                           break;
                       case 'user':
                           sessionStorage.setItem('current_user', JSON.stringify(response.user));
-                          window.location.href = '/otp';
+                          window.location.href = '/index';
                           break;
                       default:
                           window.location.href = '/';

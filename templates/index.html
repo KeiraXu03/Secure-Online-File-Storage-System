@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OTP Setup</title>
+    <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+    integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+    crossorigin="anonymous" />
+    <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+    crossorigin="anonymous"></script>
+    <script
+    src="https://code.jquery.com/jquery-3.7.1.js"
+    integrity="sha256-eKhayi8LEQwp4NKxN+CfCh+3qOVUtJn3QNZ0TciWLP4="
+    crossorigin="anonymous"></script>
+    <script type="text/javascript" src="{{ url_for('static', filename='./index.js') }}"></script>
+    <title>Secure File Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .file-manager {
+            background: white;
+            border-radius: 8px;
+            padding: 25px;
+            margin: 20px auto;
+            max-width: 1000px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .file-list-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            transition: background 0.2s;
+        }
+        .file-list-item:hover {
+            background: #f8f9fa;
+        }
+        .editor-container {
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            margin: 15px 0;
+            min-height: 300px;
+        }
+        .encryption-status {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        .encrypted { background: #28a745; }
+        .drag-drop-zone {
+            border: 2px dashed #007bff;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            margin: 20px 0;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container my-5">
+        <h1> Welcome back, {{ username }}</h1>
+        <div class="file-manager">
+            <!-- File Upload Section -->
+            <div class="drag-drop-zone" id="dropZone" ondragover="handleDragOver(event)" ondrop="handleFileDrop(event)">
+                <h4>Drag & Drop Files Here</h4>
+                <p class="text-muted">or</p>
+                <input type="file" id="fileInput" hidden multiple>
+                <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                    Select Files
+                </button>
+                <div class="mt-2 text-muted">
+                    <small>Max file size: 100MB • AES-256 Encrypted</small>
+                </div>
+            </div>
+            <!-- Key Display Modal -->
+            <div class="modal fade" id="keyModal">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header bg-danger text-white">
+                            <h5 class="modal-title">🔑 Encryption Keys</h5>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-4">
+                                <label class="form-label">Public Key (For Sharing):</label>
+                                <pre class="bg-light p-2 rounded" id="publicKey"></pre>
+                            </div>
+                            
+                            <div class="alert alert-warning">
+                                <h5>Private Key (SAVE THIS SECURELY):</h5>
+                                <pre class="bg-light p-2 rounded" id="privateKey"></pre>
+                                <p class="mt-2">⚠️ This key will NOT be stored. Loss = Permanent data inaccessibility</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="container mt-5">
+                <h1 class="mb-4">File Management</h1>
+        
+                <!-- File Query Section -->
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Query File</h5>
+                        <form id="queryFileForm" onsubmit="queryFile(event)">
+                            <div class="mb-3">
+                                <label for="filename" class="form-label">File Name</label>
+                                <input type="text" class="form-control" id="filename" placeholder="Enter file name" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="otp" class="form-label">OTP</label>
+                                <input type="text" class="form-control" id="otp" placeholder="Enter OTP" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Query</button>
+                        </form>
+                    </div>
+                </div>
+        
+                <!-- File List Section -->
+                <div id="fileListContent">
+                    <!-- Dynamically Rendered File List -->
+                </div>
+
+            <!-- File Editor Modal -->
+            <div class="modal fade" id="editorModal">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Editing: <span id="fileNameTitle"></span></h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="editor-container">
+                                <textarea id="fileContentEditor" 
+                                          class="form-control" 
+                                          rows="15"
+                                          spellcheck="false"></textarea>
+                            </div>
+                            <div class="mt-3 d-flex justify-content-between">
+                                <button class="btn btn-secondary" 
+                                        onclick="downloadFile()">
+                                    <i class="bi bi-download"></i> Download
+                                </button>
+                                <div>
+                                    <button class="btn btn-primary" 
+                                            onclick="saveChanges()">
+                                        Save Changes
+                                    </button>
+                                    <button class="btn btn-outline-danger" 
+                                            data-bs-dismiss="modal">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function handleDragOver(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.classList.add('dragover'); // 添加视觉反馈
+        }
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                await processFiles(e.target.files);
+            }
+        });
+        async function handleFileDrop(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.classList.remove('dragover');
+            
+            const files = event.dataTransfer.files;
+            if (files.length > 0) {
+                await processFiles(files);
+            }
+        }
+        async function processFiles(files) {
+            try {
+                for (const file of files) {
+                    // Upload the file to the server
+                    const response = await uploadFile(file);
+
+                    // Parse the server's response
+                    if (response.status === 'success') {
+                        // Display the public and private keys returned by the server
+                        showKeys(response.public_key, response.private_key);
+                    } else {
+                        console.error('Server error:', response.error);
+                    }
+                }
+            } catch (error) {
+                console.error('Error processing files:', error);
+            }
+        }
+
+        // Upload file to the server
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                return await response.json();
+            } catch (error) {
+                console.error('File upload error:', error);
+                throw error;
+            }
+        }
+
+        // Display the public and private keys
+        function showKeys(publicKey, privateKey) {
+            document.getElementById('publicKey').textContent = publicKey;
+            document.getElementById('privateKey').textContent = privateKey;
+            new bootstrap.Modal(document.getElementById('keyModal')).show();
+        }
+    </script>
+</body>
+
+<script>
+    // Function to render file list dynamically
+    function renderFileList(files, currentUser) {
+        const fileListContent = document.getElementById('fileListContent');
+        fileListContent.innerHTML = ''; // Clear existing content
+
+        files.forEach(file => {
+            const isOwner = file.owner === currentUser;
+            const isShared = file.shared_to.includes(currentUser);
+
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-list-item';
+
+            // Encryption status indicator
+            const encryptionStatus = document.createElement('div');
+            encryptionStatus.className = 'encryption-status encrypted';
+            fileItem.appendChild(encryptionStatus);
+
+            // File details
+            const fileDetails = document.createElement('div');
+            fileDetails.className = 'flex-grow-1';
+
+            const fileInfo = document.createElement('div');
+            fileInfo.className = 'd-flex justify-content-between align-items-center';
+
+            const fileNameSection = document.createElement('div');
+            fileNameSection.innerHTML = `
+                <span class="file-name">${file.filename}</span>
+                <small class="text-muted ms-2">${file.file_size} KB • Modified ${file.modified_time}</small>
+            `;
+            fileInfo.appendChild(fileNameSection);
+
+            // File actions
+            const fileActions = document.createElement('div');
+            fileActions.className = 'file-actions';
+
+            if (isOwner) {
+                fileActions.innerHTML = `
+                    <button class="btn btn-sm btn-outline-primary" onclick="openEditor('${file.fileid}')">
+                        <i class="bi bi-pencil"></i> Edit
+                    </button>
+                    <button class="btn btn-sm btn-outline-success" onclick="showSharingOptions('${file.fileid}')">
+                        <i class="bi bi-people"></i> Share
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteFile('${file.fileid}')">
+                        <i class="bi bi-trash"></i> Delete
+                    </button>
+                `;
+            } else if (isShared) {
+                fileActions.innerHTML = `
+                    <button class="btn btn-sm btn-outline-primary" onclick="viewFile('${file.fileid}')">
+                        <i class="bi bi-eye"></i> View
+                    </button>
+                `;
+            }
+
+            fileInfo.appendChild(fileActions);
+            fileDetails.appendChild(fileInfo);
+
+            // Shared with section
+            const sharedWithSection = document.createElement('div');
+            sharedWithSection.className = 'shared-with mt-1';
+            sharedWithSection.innerHTML = `<small>Shared with: ${file.shared_to.join(', ')}</small>`;
+            fileDetails.appendChild(sharedWithSection);
+
+            fileItem.appendChild(fileDetails);
+            fileListContent.appendChild(fileItem);
+        });
+    }
+</script>
+
+</html>

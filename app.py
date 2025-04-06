@@ -1,3 +1,5 @@
+import hashlib
+import os
 from sqlite3 import IntegrityError
 import sqlite3
 from flask import Flask, session,request, jsonify, render_template
@@ -5,13 +7,18 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
 from flask_session import Session
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric.padding import OAEP, MGF1
+from cryptography.hazmat.primitives import serialization, hashes
+import os
+import base64
 import pyotp
 import qrcode
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///storage.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'your_jwt_secret_key'
-
+app.config['UPLOAD_FOLDER'] = './uploads'  # Directory to save uploaded files
 app.config['SECRET_KEY'] = 'xuzhuoning'
 app.config['SESSION_TYPE'] = 'filesystem'  # Options: 'filesystem', 'redis', 'memcached', etc.
 app.config['SESSION_PERMANENT'] = False
@@ -34,12 +41,27 @@ class User(db.Model):
     mfa_enabled = db.Column(db.Boolean, default=False)  # 是否启用 MFA
     def __repr__(self):
         return f'<User {self.username}>'
+class files(db.Model):
+    fileid = db.Column(db.String(80), unique=True, primary_key=True)  # Unique file ID (hashed)
+    filename = db.Column(db.String(200), nullable=False)  # Original file name
+    owner = db.Column(db.String(120), nullable=False)  # Username of the file owner
+    shared_to = db.Column(db.String(20), nullable=True)  # Comma-separated list of usernames
+    file_path = db.Column(db.String(200), nullable=False)  # File storage path
+    file_size = db.Column(db.Integer, nullable=False)  # File size in bytes
+    def __repr__(self):
+        return f'<files {self.fileid}>'
 with app.app_context():
     db.create_all()
 # 首页
 @app.route('/')
 def hello():
     return render_template('login.html')
+
+
+@app.route('/index')
+def index():
+    return render_template('index.html',username=session.get('username'))
+
 @app.route('/login')
 def login_page():
     return render_template('login.html')
@@ -245,6 +267,97 @@ def reset_password():
     except Exception as e:
         db.session.rollback()
         return jsonify({'status': 'error', 'message': f'Error resetting password: {str(e)}'}), 500
+    
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    UPLOAD_FOLDER = './upload/'+session.get('username')
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    try:
+        # Check if file is uploaded
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'Empty filename'}), 400
+        
+        # Generate RSA key pair
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048
+        )
+        public_key = private_key.public_key()
+        
+        # Serialize keys
+        private_key_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        ).decode('utf-8')
+        
+        public_key_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode('utf-8')
+        
+        # Encrypt file data in chunks
+        file_data = file.read()
+        chunk_size = 190  # RSA-OAEP limitation
+        encrypted_chunks = []
+        
+        for i in range(0, len(file_data), chunk_size):
+            chunk = file_data[i:i + chunk_size]
+            encrypted_chunk = public_key.encrypt(
+                chunk,
+                OAEP(
+                    mgf=MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            encrypted_chunks.append(encrypted_chunk)
+        
+        # Combine encrypted chunksfilename = file.filename
+        file_size = len(file.read())  # Get file size in bytes
+        file.seek(0)  # Reset file pointer after reading size
+
+        # Generate a unique file ID
+        username = session.get('username')
+        filename = file.filename
+        fileid = generate_file_id(username, filename)
+
+        encrypted_data = b''.join(encrypted_chunks)
+        
+        # Save encrypted file
+
+        save_path = os.path.join(UPLOAD_FOLDER, hashlib.sha256(filename.encode()).hexdigest() + '.enc')
+        with open(save_path, 'wb') as encrypted_file:
+            encrypted_file.write(encrypted_data)
+        new_file = files(
+            fileid=fileid,
+            filename=hashlib.sha256(filename.encode()).hexdigest(),
+            owner=hashlib.sha256(username.encode()).hexdigest(),
+            shared_to='',  # Initially no sharing
+            file_path=save_path,
+            file_size=file_size
+        )
+        db.session.add(new_file)
+        db.session.commit()
+        return jsonify({
+            'status': 'success',
+            'message': 'File encrypted and stored securely',
+            'public_key': public_key_pem,
+            'private_key': private_key_pem
+        }), 200
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+# Helper function to generate a unique file ID
+def generate_file_id(username, filename):
+    # Combine username and filename and create a SHA-256 hash
+    unique_string = f"{username}_{filename}"
+    return hashlib.sha256(unique_string.encode()).hexdigest()
+
 
 if __name__ == '__main__':
     # 确保在应用上下文中创建数据库
