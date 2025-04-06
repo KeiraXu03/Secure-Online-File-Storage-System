@@ -22,6 +22,7 @@ $(document).ready(function () {
                 console.log("success")
                 console.log(data)
                 const fileList = document.getElementById('fileListContent');
+                fileList.innerHTML = ''; // Clear previous results
                 if (data.status === 'success') {
                     const file = data.file;
 
@@ -33,9 +34,24 @@ $(document).ready(function () {
                         <p><strong>Owner:</strong> ${file.owner}</p>
                         <p><strong>File Size:</strong> ${file.file_size} bytes</p>
                         <p><strong>File Content:</strong></p>
-                        <pre>${file.file_content}</pre>
+                        <pre id="txt_content">${file.file_content}</pre>
+                        <div class="row">
+                            <div class="col-3">
+                                <button id="downloadBtn" class="btn btn-primary" onclick="downloadFile('${file.filename}')">download</button>
+                            </div>
+                            <div class="col-3">
+                                <button id="edit" class="btn btn-primary">edit</button>
+                            </div>
+                            <div class="col-3">
+                                <button id="share" class="btn btn-primary">share</button>
+                            </div>
+                            <div class="col-3">
+                                <button id="query" class="btn btn-primary">delete</button>
+                            </div>
+                        <div>
+                        
                     `;
-
+                    
                     // Append the details to the fileList container
                     fileList.appendChild(fileDetails);
                 } else {
@@ -58,4 +74,27 @@ $(document).ready(function () {
         
     });
 
+    
 });
+
+function downloadFile(filename) {
+    // 获取 <pre> 标签中的内容
+    const fileContent = document.getElementById('txt_content').textContent;
+
+    // 创建一个 Blob 对象，表示文件内容
+    const blob = new Blob([fileContent], { type: 'text/plain' });
+
+    // 创建一个下载链接
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    console.log(filename)
+    // 设置下载的文件名（确保以 .txt 结尾）
+    const filename2 = filename.endsWith('.txt') ? filename : `${filename}.txt`;
+    link.download = filename2;
+
+    // 触发下载
+    link.click();
+
+    // 释放 URL 对象资源
+    URL.revokeObjectURL(link.href);
+}

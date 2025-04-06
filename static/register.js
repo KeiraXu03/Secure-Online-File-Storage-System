@@ -5,13 +5,13 @@ $(document).ready(function () {
     const selectedValue = $(this).val();
 
     // 检查是否选择了 "admin"
-    if (selectedValue === 'admin') {
-      // 弹出警告
-      alert('You cannot select "admin".');
+    // if (selectedValue === 'admin') {
+    //   // 弹出警告
+    //   alert('You cannot select "admin".');
 
-      // 将值改回 "user"
-      $(this).val('user');
-    }
+    //   // 将值改回 "user"
+    //   $(this).val('user');
+    // }
   });
 
   // 验证邮箱格式

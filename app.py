@@ -393,8 +393,8 @@ def handle_file_query():
 
                 # Decrypt the file using the user's private key
                 private_key_pem = request.form.get('private_key')
-                print(private_key_pem)
-                print(encrypted_data)
+                #print(private_key_pem)
+                #print(encrypted_data)
                 file_content = decrypt_file(encrypted_data, private_key_pem)
 
                 # Return file content

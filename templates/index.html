@@ -130,41 +130,6 @@
                     <!-- Dynamically Rendered File List -->
                 </div>
 
-            <!-- File Editor Modal -->
-            <div class="modal fade" id="editorModal">
-                <div class="modal-dialog modal-lg">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title">Editing: <span id="fileNameTitle"></span></h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">
-                            <div class="editor-container">
-                                <textarea id="fileContentEditor" 
-                                          class="form-control" 
-                                          rows="15"
-                                          spellcheck="false"></textarea>
-                            </div>
-                            <div class="mt-3 d-flex justify-content-between">
-                                <button class="btn btn-secondary" 
-                                        onclick="downloadFile()">
-                                    <i class="bi bi-download"></i> Download
-                                </button>
-                                <div>
-                                    <button class="btn btn-primary" 
-                                            onclick="saveChanges()">
-                                        Save Changes
-                                    </button>
-                                    <button class="btn btn-outline-danger" 
-                                            data-bs-dismiss="modal">
-                                        Cancel
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
 
