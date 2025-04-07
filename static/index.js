@@ -1,4 +1,6 @@
 $(document).ready(function () {
+    // Unified form submission handler
+    // Frontend JavaScript
     $('#query').on('click', function(event){
         event.preventDefault();
         
@@ -9,53 +11,73 @@ $(document).ready(function () {
         formData.append('filename', filename);
         formData.append('otp', otp);
         formData.append('private_key', secret_key);
-        
         $.ajax({
             url: '/query_file',
             type: 'POST',
+            //contentType: 'application/json',
             data: formData,
             processData: false,
-            contentType: false,  // 仅保留这一条，让 jQuery 自己设置合适的 multipart/form-data
+            contentType: false,
             success: function (data) {
-                console.log("success", data);
+                console.log("success")
+                console.log(data)
                 const fileList = document.getElementById('fileListContent');
                 fileList.innerHTML = ''; // Clear previous results
                 if (data.status === 'success') {
-                    // ...
+                    const file = data.file;
+
+                    // Create a container for the file details
+                    const fileDetails = document.createElement('div');
+                    fileDetails.innerHTML = `
+                        <h3>File Details</h3>
+                        <p><strong>Filename:</strong> ${file.filename}</p>
+                        <p><strong>Owner:</strong> ${file.owner}</p>
+                        <p><strong>File Size:</strong> ${file.file_size} bytes</p>
+                        <p><strong>File Content:</strong></p>
+                        <pre id="txt_content">${file.file_content}</pre>
+                        <div class="row">
+                            <div class="col-3">
+                                <button id="downloadBtn" class="btn btn-primary" onclick="downloadFile('${file.filename}')">download</button>
+                            </div>
+                            <div class="col-3">
+                                <button id="edit" class="btn btn-primary">edit</button>
+                            </div>
+                            <div class="col-3">
+                                <button id="share" class="btn btn-primary">share</button>
+                            </div>
+                            <div class="col-3">
+                                <button id="query" class="btn btn-primary" onclick="deleteFile('${file.filename}')">delete</button>
+                            </div>
+                        <div>
+                        
+                    `;
+                    
+                    // Append the details to the fileList container
+                    fileList.appendChild(fileDetails);
                 } else {
+                    // Display an error message
                     const errorMessage = document.createElement('p');
                     errorMessage.style.color = 'red';
                     errorMessage.textContent = `Error: ${data.message}`;
                     fileList.appendChild(errorMessage);
-                }
-            },
-            error: function (xhr, status, error) {
-                // 这里自动进入 error 回调，通常因为 HTTP 4xx/5xx
-                let errMsg = "Network error occurred";
-                try {
-                    // 尝试解析后端返回的 JSON（如 {status: 'error', message: 'No permission...'}）
-                    const response = JSON.parse(xhr.responseText);
-                    if (response && response.message) {
-                        errMsg = response.message;
                     }
-                } catch (e) {
-                }
-        
+                },
+            error: function (xhr, status, error) {
                 console.error('Error:', error);
                 const fileList = document.getElementById('fileListContent');
                 fileList.innerHTML = `
                     <div class="alert alert-danger mt-3">
-                        ${errMsg}
+                        Network error occurred
                     </div>`;
             }
-        });        
+        });
         
     });
+
+    
 });
 
 
-
-// 示例：监听“share”按钮点击
 $(document).on('click', '#share', function(e) {
     e.preventDefault();
     // filename从当前输入获取
@@ -111,6 +133,8 @@ function downloadFile(filename) {
 
     // 释放 URL 对象资源
     URL.revokeObjectURL(link.href);
+
+
 }
 function deleteFile(fileid) {
     const formData = new FormData();
@@ -133,3 +157,130 @@ function deleteFile(fileid) {
         }
     });
 }
+
+$(document).on('click', '#edit', function(e) {
+    e.preventDefault();
+    // 先获取 filename
+    const filename = document.getElementById('filename').value.trim();
+    openEditor(filename);
+});
+
+
+$(document).on('click', '#edit', function(e) {
+    e.preventDefault();
+    const filename = document.getElementById('filename').value.trim();
+    openEditor(filename); 
+});
+
+function openEditor(fileid) {
+    const filename = document.getElementById('filename').value.trim();
+    const otp = document.getElementById('otp').value.trim();
+    const privateKey = document.getElementById('secret_key').value.trim();
+
+    const formData = new FormData();
+    formData.append('filename', filename);
+    formData.append('otp', otp);
+    formData.append('private_key', privateKey);
+
+    $.ajax({
+        url: '/query_file',
+        type: 'POST',
+        data: formData,
+        processData: false,
+        contentType: false,
+        success: function(data) {
+            if (data.status === 'success') {
+                const fileContent = data.file.file_content;
+                const fileList = document.getElementById('fileListContent');
+
+                fileList.innerHTML = `
+                    <h3>Edit File: ${filename}</h3>
+
+                    <!-- 新增：在编辑界面顶部，插入“Reuse Old Private Key?”复选框 -->
+                    <label>
+                      <input type="checkbox" id="reuseKeyCheckbox" value="1" />
+                      Reuse Old Private Key?
+                    </label>
+                    <br/><br/>
+
+                    <textarea id="editorTextarea" rows="10" class="form-control">${fileContent}</textarea>
+                    <br/>
+                    <button id="saveBtn" class="btn btn-primary">Save</button>
+                    <button id="cancelBtn" class="btn btn-secondary">Cancel</button>
+                `;
+
+                $('#saveBtn').on('click', function() {
+                    const updatedContent = document.getElementById('editorTextarea').value;
+                    saveChanges(filename, updatedContent, otp);
+                });
+                $('#cancelBtn').on('click', function() {
+                    fileList.innerHTML = ''; 
+                });
+            } else {
+                alert(`Error retrieving file content: ${data.message}`);
+            }
+        },
+        error: function(xhr) {
+            alert("Failed to load file content for editing");
+        }
+    });
+}
+
+function saveChanges(filename, updatedContent, otp) {
+    const reuseKey = document.getElementById('reuseKeyCheckbox').checked; 
+
+    const formData = new FormData();
+    formData.append('filename', filename);
+    formData.append('newContent', updatedContent);
+    formData.append('otp', otp || '');
+
+    if (reuseKey) {
+        // 若勾选 => 传 reuse_key='true' 并提供旧私钥
+        const oldPrivateKey = document.getElementById('secret_key').value.trim(); 
+        formData.append('old_private_key', oldPrivateKey);
+        formData.append('reuse_key', 'true');
+    } else {
+        // 不勾选 => reuse_key='false'
+        formData.append('reuse_key', 'false');
+    }
+
+    $.ajax({
+        url: '/update_file',
+        type: 'POST',
+        data: formData,
+        processData: false,
+        contentType: false,
+        success: function(data) {
+            if (data.status === 'success') {
+
+                const msg = document.createElement('p');
+                msg.innerText = "Successfully updated：";
+                
+                // 创建一个多行文本框来显示密钥
+                const textArea = document.createElement('textarea');
+                textArea.rows = 10;
+                textArea.style.width = "100%";
+                textArea.value = data.private_key; 
+            
+                const copyBtn = document.createElement('button');
+                copyBtn.innerText = "Copy";
+                copyBtn.onclick = function() {
+                    textArea.select();
+                    document.execCommand("copy");
+                    alert("key copied");
+                };
+            
+                const fileList = document.getElementById('fileListContent');
+                fileList.innerHTML = ''; // 清空之前的内容
+                fileList.appendChild(msg);
+                fileList.appendChild(textArea);
+                fileList.appendChild(copyBtn);
+            }
+            
+        },
+        error: function(xhr) {
+            alert("Failed to update file");
+        }
+    });
+}
+
