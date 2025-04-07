@@ -15,6 +15,7 @@ import os
 import base64
 import pyotp
 import qrcode
+from datetime import datetime, timezone
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///storage.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -51,8 +52,28 @@ class files(db.Model):
     file_size = db.Column(db.Integer, nullable=False)  # File size in bytes
     def __repr__(self):
         return f'<files {self.fileid}>'
+class Logs(db.Model):
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    username = db.Column(db.String(80), nullable=False)   # user
+    action = db.Column(db.String(200), nullable=False)     # discription like "LOGIN", "REGISTER", "UPLOAD", "DELETE"
+    detail = db.Column(db.String(500), nullable=True)      # details
+    timestamp = db.Column(db.DateTime, nullable=False)     # time
+    def __repr__(self):
+        return f'<Logs id={self.id} username={self.username} action={self.action}>'
+
 with app.app_context():
     db.create_all()
+
+def create_log(username, action, detail=""): #write log
+    new_log = Logs(
+        username=username,
+        action=action,
+        detail=detail,
+        timestamp=datetime.now(timezone.utc)  # 使用时区感知的时间
+    )
+    db.session.add(new_log)
+    db.session.commit()
+
 # 首页
 @app.route('/')
 def hello():
@@ -106,6 +127,7 @@ def register():
              # 生成 OTP 并保存密钥
             db.session.add(new_user)
             db.session.commit()
+            create_log(username=username, action="REGISTER", detail="User registered successfully") # register log
             session['username'] = username
             session['provisioning_uri'] = provisioning_uri
             session['otp_secret'] = otp_secret
@@ -135,6 +157,8 @@ def login():
             
             # Enhanced password verification
             if user and bcrypt.check_password_hash(user.password, password):
+                session['username'] = user.username
+                create_log(username=user.username, action="LOGIN", detail="User logged in") # write login log
                 # Return complete user data
                 access_token = create_access_token(identity={
                     "username": user.username,
@@ -262,7 +286,7 @@ def reset_password():
         hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
         user.password = hashed_password
         db.session.commit()
-
+        create_log(username=session.get('username'), action="PassowrdReset", detail=f"Password has been reset.")
         return jsonify({'status': 'success', 'message': 'Password reset successful!'}), 200
 
     except Exception as e:
@@ -344,6 +368,7 @@ def upload_file():
         )
         db.session.add(new_file)
         db.session.commit()
+        create_log(username=username, action="UPLOAD", detail=f"Uploaded file: {filename}")#upload log
         return jsonify({
             'status': 'success',
             'message': 'File encrypted and stored securely',
@@ -462,11 +487,27 @@ def delete_file(fileid):
         os.remove(file.file_path)  # 删除文件
         db.session.delete(file)
         db.session.commit()
+        create_log(username=session.get('username'), action="DELETE", detail=f"Deleted file: {file.filename}") # delete log
         return jsonify({'message': 'File deleted successfully'}), 200
     except Exception as e:
         return jsonify({'error': 'Failed to delete file', 'details': str(e)}), 500
+    
+# 管理员api
+@app.route('/admin_dashboard', methods=['GET'])
+def admin_dashboard():
+    current_username = session.get('username')
+    if not current_username:
+        return "Please login first", 401
 
+    user = User.query.filter_by(username=current_username).first()
+    if not user:
+        return "User not found", 404
 
+    if user.role != 'admin':
+        return "Forbidden: Admin only", 403
+
+    all_logs = Logs.query.order_by(Logs.timestamp.desc()).all()
+    return render_template('admin_dashboard.html', logs=all_logs)
 
 if __name__ == '__main__':
     # 确保在应用上下文中创建数据库
