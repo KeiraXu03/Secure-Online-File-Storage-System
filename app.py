@@ -580,7 +580,7 @@ def update_file():
     try:
         filename = request.form.get('filename')
         newContent = request.form.get('newContent')
-        # 可选：前端是否提交了 OTP 等二次校验
+        # 前端是否提交了 OTP 等二次校验
         otp = request.form.get('otp', None)
 
         reuseKeyFlag = request.form.get('reuse_key')  # 传 'true'/'false' 或 'yes'/'no' 均可
@@ -613,7 +613,7 @@ def update_file():
             return jsonify({'status': 'error', 'message': 'No permission to edit this file'}), 403
 
         if reuseKeyFlag.lower() == 'true':
-            # 1. 用户想“沿用原先的私钥”
+            # 用户想沿用原先的私钥
             old_private_key_pem = request.form.get('old_private_key')
             if not old_private_key_pem:
                 return jsonify({
@@ -632,7 +632,6 @@ def update_file():
 
             public_key = private_key.public_key()
 
-            # 用这把公钥去加密 newContent
             file_data = newContent.encode('utf-8')
             chunk_size = 190
             encrypted_chunks = []
@@ -657,7 +656,6 @@ def update_file():
             # 记录日志
             create_log(username=username, action="EDIT", detail=f"Edited file (reuse old key): {filename}")
 
-            # 可以选择只返回公钥或都不返回
             updated_public_key_pem = public_key.public_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
@@ -671,7 +669,7 @@ def update_file():
             }), 200
 
         else:
-            # 2. 用户不想沿用旧私钥 => 生成新的公私钥
+            # 用户不想沿用旧私钥 => 生成新的公私钥
             new_private_key = rsa.generate_private_key(
                 public_exponent=65537,
                 key_size=2048
@@ -703,7 +701,6 @@ def update_file():
             # 记录日志
             create_log(username=username, action="EDIT", detail=f"Edited file (generated new key): {filename}")
 
-            # 把新公私钥返回给用户“像query一样展示”
             new_private_key_pem = new_private_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PrivateFormat.PKCS8,
