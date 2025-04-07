@@ -378,6 +378,7 @@ def upload_file():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
 # Helper function to generate a unique file ID
 def generate_file_id(username, filename):
     # Combine username and filename and create a SHA-256 hash
@@ -385,57 +386,83 @@ def generate_file_id(username, filename):
     return hashlib.sha256(unique_string.encode()).hexdigest()
 
 
+
+
+
+
+
 @app.route('/query_file', methods=['POST'])
 def handle_file_query():
     try:
         filename = request.form.get('filename')
         otp = request.form.get('otp')
-        username=session.get('username')
+        username = session.get('username')
         user = User.query.filter_by(username=username).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found in session'}), 404
         otp_secret = user.otp_secret
-
         totp = pyotp.TOTP(otp_secret)
         if not totp.verify(otp):
             return jsonify({'status': 'error', 'message': 'Invalid OTP!'})
+        hashed_filename = hashlib.sha256(filename.encode()).hexdigest()# Hash filename
 
-        # Hash filename and username
-        hashed_filename = hashlib.sha256(filename.encode()).hexdigest()
-        hashed_owner = hashlib.sha256(username.encode()).hexdigest()
-        filesid = generate_file_id(username, filename)
-        # Query file information
-        file_entry = files.query.filter_by(fileid=filesid).first()
-        if not file_entry:
-            return jsonify({'status': 'error', 'message': 'File not found!'})
+#       hashed_owner = hashlib.sha256(username.encode()).hexdigest()
+#       filesid = generate_file_id(username, filename)
+#       # Query file information
+#       file_entry = files.query.filter_by(fileid=filesid).first()
+#       if not file_entry:
+#           return jsonify({'status': 'error', 'message': 'File not found!'})
 
-        # Check ownership or sharing permissions
-        if file_entry.owner == hashed_owner or username in file_entry.share_to.split(','):
-            # Return file content
-            filepath = file_entry.file_path
-            try:
-                # Read the encrypted file
-                with open(filepath, 'rb') as enc_file:
-                    encrypted_data = enc_file.read()
+#       # Check ownership or sharing permissions
+#       if file_entry.owner == hashed_owner or username in file_entry.share_to.split(','):
+#           # Return file content
+#           filepath = file_entry.file_path
 
-                # Decrypt the file using the user's private key
-                private_key_pem = request.form.get('private_key')
-                #print(private_key_pem)
-                #print(encrypted_data)
-                file_content = decrypt_file(encrypted_data, private_key_pem)
+        #change starts
+        candidate_files = files.query.filter_by(filename=hashed_filename).all()
+        if not candidate_files:
+            return jsonify({'status': 'error', 'message': 'File not found!'}), 404
+        #遍历 candidate_files，看有没有用户可访问的
+        hashed_current_user = hashlib.sha256(username.encode()).hexdigest()
+        allowed_file_entry = None
+        for f in candidate_files:
+            # 如果 f.owner 是当前用户自己，或者 username 在 shared_to
+            share_list = f.shared_to.split(',') if f.shared_to else []
+            if (f.owner == hashed_current_user) or (username in share_list):
+                # 找到了一个用户有权限访问的文件
+                allowed_file_entry = f
+                break
+        if not allowed_file_entry:
+            return jsonify({'status': 'error', 'message': 'No permission to access this file'}), 403
+        #读取并解密
+        filepath = allowed_file_entry.file_path
+        #change ends
 
-                # Return file content
-                return jsonify({'status': 'success', 
-                                'file': {
-                                    'filename': filename,
-                                    'owner': username,
-                                    'file_size': len(file_content),
-                                    'file_content': file_content
-                                }}), 200
-            except Exception as e:
-                return jsonify({'status': 'error', 'message': f'Error reading or decrypting file: {str(e)}'})
+        try:
+            with open(filepath, 'rb') as enc_file:
+                encrypted_data = enc_file.read()
+            private_key_pem = request.form.get('private_key')
+            file_content = decrypt_file(encrypted_data, private_key_pem)
+
+            return jsonify({'status': 'success',
+                'file': {
+                    'filename': filename,
+                    'owner': username,  # 前端看起来是谁在查询
+                    'file_size': len(file_content),
+                    'file_content': file_content
+                }}), 200
+        except Exception as e:
+            return jsonify({
+                'status': 'error',
+                'message': f'Error reading or decrypting file: {str(e)}'
+            })
 
     except Exception as e:
-        # Handle exceptions and return error messages
-        return jsonify({'status': 'error', 'message': f'Error processing request: {str(e)}'})
+        return jsonify({
+            'status': 'error',
+            'message': f'Error processing request: {str(e)}'
+        })
+
 
 def decrypt_file(encrypted_data, private_key_pem):
     try:
@@ -477,11 +504,9 @@ def delete_file(fileid):
     file = files.query.filter_by(fileid=fileid).first()
     if not file:
         return jsonify({'error': 'Permission denied'}), 404
-
     # 验证权限：只有文件的 owner 可以删除
     if file.owner != hashlib.sha256(session.get('username').encode()).hexdigest():
         return jsonify({'error': 'Permission denied'}), 403
-
     try:
         # 删除文件记录
         os.remove(file.file_path)  # 删除文件
@@ -491,7 +516,53 @@ def delete_file(fileid):
         return jsonify({'message': 'File deleted successfully'}), 200
     except Exception as e:
         return jsonify({'error': 'Failed to delete file', 'details': str(e)}), 500
+
+@app.route('/share_file', methods=['POST'])
+def share_file():
+    current_username = session.get('username')
+    if not current_username:
+        return jsonify({'status': 'error', 'message': 'Not logged in'}), 401
     
+    filename = request.form.get('filename')
+    target_user = request.form.get('target_user')
+    if not filename or not target_user:
+        return jsonify({'status': 'error', 'message': 'filename and target_user required'}), 400
+    #计算 fileid = generate_file_id(当前登录用户, filename)
+    fileid = generate_file_id(current_username, filename)
+    file_entry = files.query.filter_by(fileid=fileid).first()
+    if not file_entry:
+        return jsonify({'status': 'error', 'message': 'File not found or no permission'}), 404
+    #验证是否 owner
+    hashed_owner = hashlib.sha256(current_username.encode()).hexdigest()
+    if file_entry.owner != hashed_owner:
+        return jsonify({'status': 'error', 'message': 'Only owner can share'}), 403
+    #追加 target_user 到 shared_to
+    try:
+        existing = file_entry.shared_to  # 逗号分隔
+        if existing:
+            shared_list = existing.split(',')
+        else:
+            shared_list = []
+
+        if target_user not in shared_list:
+            shared_list.append(target_user)
+            file_entry.shared_to = ",".join(shared_list)
+            db.session.commit()
+
+            # 写日志
+            create_log(
+                username=current_username, 
+                action="SHARE",
+                detail=f"Shared file {filename} to {target_user}"
+            )
+            return jsonify({'status': 'success', 'message': f"File '{filename}' shared to {target_user}"}), 200
+        else:
+            return jsonify({'status': 'success', 'message': f"{target_user} already in shared list"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': f'Error sharing file: {str(e)}'}), 500
+
+
 # 管理员api
 @app.route('/admin_dashboard', methods=['GET'])
 def admin_dashboard():
