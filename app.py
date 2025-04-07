@@ -385,12 +385,6 @@ def generate_file_id(username, filename):
     unique_string = f"{username}_{filename}"
     return hashlib.sha256(unique_string.encode()).hexdigest()
 
-
-
-
-
-
-
 @app.route('/query_file', methods=['POST'])
 def handle_file_query():
     try:
@@ -579,6 +573,10 @@ def admin_dashboard():
 
     all_logs = Logs.query.order_by(Logs.timestamp.desc()).all()
     return render_template('admin_dashboard.html', logs=all_logs)
+
+@app.errorhandler(403)
+def custom_403(e):
+    return jsonify({'status': 'error','message':'No permission (403)'}), 403
 
 if __name__ == '__main__':
     # 确保在应用上下文中创建数据库
