@@ -574,9 +574,156 @@ def admin_dashboard():
     all_logs = Logs.query.order_by(Logs.timestamp.desc()).all()
     return render_template('admin_dashboard.html', logs=all_logs)
 
-@app.errorhandler(403)
-def custom_403(e):
-    return jsonify({'status': 'error','message':'No permission (403)'}), 403
+
+@app.route('/update_file', methods=['POST'])
+def update_file():
+    try:
+        filename = request.form.get('filename')
+        newContent = request.form.get('newContent')
+        # 可选：前端是否提交了 OTP 等二次校验
+        otp = request.form.get('otp', None)
+
+        reuseKeyFlag = request.form.get('reuse_key')  # 传 'true'/'false' 或 'yes'/'no' 均可
+
+        if not all([filename, newContent, reuseKeyFlag]):
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+        username = session.get('username')
+        if not username:
+            return jsonify({'status': 'error', 'message': 'Not logged in'}), 401
+
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            return jsonify({'status': 'error', 'message': 'User not found in session'}), 404
+
+        hashed_filename = hashlib.sha256(filename.encode()).hexdigest()
+        candidate_files = files.query.filter_by(filename=hashed_filename).all()
+        if not candidate_files:
+            return jsonify({'status': 'error', 'message': 'File not found!'}), 404
+
+        hashed_current_user = hashlib.sha256(username.encode()).hexdigest()
+        allowed_file_entry = None
+        for f in candidate_files:
+            share_list = f.shared_to.split(',') if f.shared_to else []
+            # 只要是文件owner或在分享列表里，就能编辑
+            if (f.owner == hashed_current_user) or (username in share_list):
+                allowed_file_entry = f
+                break
+        if not allowed_file_entry:
+            return jsonify({'status': 'error', 'message': 'No permission to edit this file'}), 403
+
+        if reuseKeyFlag.lower() == 'true':
+            # 1. 用户想“沿用原先的私钥”
+            old_private_key_pem = request.form.get('old_private_key')
+            if not old_private_key_pem:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'You chose to reuse old key, but no old_private_key provided!'
+                }), 400
+
+            try:
+                # 用旧私钥推导出公钥
+                private_key = serialization.load_pem_private_key(
+                    old_private_key_pem.encode('utf-8'),
+                    password=None
+                )
+            except Exception as e:
+                return jsonify({'status': 'error', 'message': f'Invalid old private key: {str(e)}'}), 400
+
+            public_key = private_key.public_key()
+
+            # 用这把公钥去加密 newContent
+            file_data = newContent.encode('utf-8')
+            chunk_size = 190
+            encrypted_chunks = []
+            for i in range(0, len(file_data), chunk_size):
+                chunk = file_data[i:i + chunk_size]
+                enc = public_key.encrypt(
+                    chunk,
+                    OAEP(
+                        mgf=MGF1(algorithm=hashes.SHA256()),
+                        algorithm=hashes.SHA256(),
+                        label=None
+                    )
+                )
+                encrypted_chunks.append(enc)
+            encrypted_data = b''.join(encrypted_chunks)
+
+            # 覆盖写回
+            save_path = allowed_file_entry.file_path
+            with open(save_path, 'wb') as f:
+                f.write(encrypted_data)
+
+            # 记录日志
+            create_log(username=username, action="EDIT", detail=f"Edited file (reuse old key): {filename}")
+
+            # 可以选择只返回公钥或都不返回
+            updated_public_key_pem = public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ).decode('utf-8')
+
+            return jsonify({
+                'status': 'success',
+                'message': f"File '{filename}' updated successfully using old key",
+                'public_key': updated_public_key_pem,
+                # 'private_key': old_private_key_pem, # 用户自己已有，可不再返回
+            }), 200
+
+        else:
+            # 2. 用户不想沿用旧私钥 => 生成新的公私钥
+            new_private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048
+            )
+            new_public_key = new_private_key.public_key()
+
+            # 用新公钥加密
+            file_data = newContent.encode('utf-8')
+            chunk_size = 190
+            encrypted_chunks = []
+            for i in range(0, len(file_data), chunk_size):
+                chunk = file_data[i:i + chunk_size]
+                enc = new_public_key.encrypt(
+                    chunk,
+                    OAEP(
+                        mgf=MGF1(algorithm=hashes.SHA256()),
+                        algorithm=hashes.SHA256(),
+                        label=None
+                    )
+                )
+                encrypted_chunks.append(enc)
+            encrypted_data = b''.join(encrypted_chunks)
+
+            # 覆盖写回
+            save_path = allowed_file_entry.file_path
+            with open(save_path, 'wb') as f:
+                f.write(encrypted_data)
+
+            # 记录日志
+            create_log(username=username, action="EDIT", detail=f"Edited file (generated new key): {filename}")
+
+            # 把新公私钥返回给用户“像query一样展示”
+            new_private_key_pem = new_private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ).decode('utf-8')
+            new_public_key_pem = new_public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ).decode('utf-8')
+
+            return jsonify({
+                'status': 'success',
+                'message': f"File '{filename}' updated successfully with a new key pair",
+                'public_key': new_public_key_pem,
+                'private_key': new_private_key_pem
+            }), 200
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error updating file: {str(e)}'}), 500
+
 
 if __name__ == '__main__':
     # 确保在应用上下文中创建数据库
