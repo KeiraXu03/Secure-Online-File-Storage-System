@@ -1,6 +1,4 @@
 $(document).ready(function () {
-    // Unified form submission handler
-    // Frontend JavaScript
     $('#query').on('click', function(event){
         event.preventDefault();
         
@@ -11,71 +9,87 @@ $(document).ready(function () {
         formData.append('filename', filename);
         formData.append('otp', otp);
         formData.append('private_key', secret_key);
+        
         $.ajax({
             url: '/query_file',
             type: 'POST',
-            contentType: 'application/json',
             data: formData,
             processData: false,
-            contentType: false,
+            contentType: false,  // 仅保留这一条，让 jQuery 自己设置合适的 multipart/form-data
             success: function (data) {
-                console.log("success")
-                console.log(data)
+                console.log("success", data);
                 const fileList = document.getElementById('fileListContent');
                 fileList.innerHTML = ''; // Clear previous results
                 if (data.status === 'success') {
-                    const file = data.file;
-
-                    // Create a container for the file details
-                    const fileDetails = document.createElement('div');
-                    fileDetails.innerHTML = `
-                        <h3>File Details</h3>
-                        <p><strong>Filename:</strong> ${file.filename}</p>
-                        <p><strong>Owner:</strong> ${file.owner}</p>
-                        <p><strong>File Size:</strong> ${file.file_size} bytes</p>
-                        <p><strong>File Content:</strong></p>
-                        <pre id="txt_content">${file.file_content}</pre>
-                        <div class="row">
-                            <div class="col-3">
-                                <button id="downloadBtn" class="btn btn-primary" onclick="downloadFile('${file.filename}')">download</button>
-                            </div>
-                            <div class="col-3">
-                                <button id="edit" class="btn btn-primary">edit</button>
-                            </div>
-                            <div class="col-3">
-                                <button id="share" class="btn btn-primary">share</button>
-                            </div>
-                            <div class="col-3">
-                                <button id="query" class="btn btn-primary" onclick="deleteFile('${file.filename}')">delete</button>
-                            </div>
-                        <div>
-                        
-                    `;
-                    
-                    // Append the details to the fileList container
-                    fileList.appendChild(fileDetails);
+                    // ...
                 } else {
-                    // Display an error message
                     const errorMessage = document.createElement('p');
                     errorMessage.style.color = 'red';
                     errorMessage.textContent = `Error: ${data.message}`;
                     fileList.appendChild(errorMessage);
-                    }
-                },
+                }
+            },
             error: function (xhr, status, error) {
+                // 这里自动进入 error 回调，通常因为 HTTP 4xx/5xx
+                let errMsg = "Network error occurred";
+                try {
+                    // 尝试解析后端返回的 JSON（如 {status: 'error', message: 'No permission...'}）
+                    const response = JSON.parse(xhr.responseText);
+                    if (response && response.message) {
+                        errMsg = response.message;
+                    }
+                } catch (e) {
+                }
+        
                 console.error('Error:', error);
                 const fileList = document.getElementById('fileListContent');
                 fileList.innerHTML = `
                     <div class="alert alert-danger mt-3">
-                        Network error occurred
+                        ${errMsg}
                     </div>`;
             }
-        });
+        });        
         
     });
-
-    
 });
+
+
+
+// 示例：监听“share”按钮点击
+$(document).on('click', '#share', function(e) {
+    e.preventDefault();
+    // filename从当前输入获取
+    const filename = document.getElementById('filename').value.trim();
+
+    // 弹出一个prompt让用户输入目标用户名
+    const targetUser = prompt("Enter the username you want to share with:");
+    if (!targetUser) {
+        alert("No target user provided.");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('filename', filename);
+    formData.append('target_user', targetUser);
+
+    fetch('/share_file', {
+        method: 'POST',
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'success') {
+            alert(data.message);  // “File 'xxx' shared to someUser”
+        } else {
+            alert(`Share error: ${data.message}`);
+        }
+    })
+    .catch(err => {
+        alert(`Failed to share file: ${err}`);
+    });
+});
+
+
 
 function downloadFile(filename) {
     // 获取 <pre> 标签中的内容
