@@ -17,7 +17,7 @@
     src="https://code.jquery.com/jquery-3.7.1.js"
     integrity="sha256-eKhayi8LEQwp4NKxN+CfCh+3qOVUtJn3QNZ0TciWLP4="
     crossorigin="anonymous"></script>
-    <script type="text/javascript" src="{{ url_for('static', filename='./index.js') }}"></script>
+    <script type="text/javascript" src="{{ url_for('static', filename='index.js') }}"></script>
     <title>Secure File Manager</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -90,7 +90,6 @@
                                 <label class="form-label">Public Key (For Sharing):</label>
                                 <pre class="bg-light p-2 rounded" id="publicKey"></pre>
                             </div>
-                            
                             <div class="alert alert-warning">
                                 <h5>Private Key (SAVE THIS SECURELY):</h5>
                                 <pre class="bg-light p-2 rounded" id="privateKey"></pre>
@@ -155,22 +154,59 @@
                 await processFiles(files);
             }
         }
+        // 处理文件上传，加密后再上传
         async function processFiles(files) {
-            try {
-                for (const file of files) {
-                    // Upload the file to the server
-                    const response = await uploadFile(file);
+            for (const file of files) {
+                // 生成 RSA 密钥对
+                const keyPair = await window.crypto.subtle.generateKey({
+                    name: "RSA-OAEP",
+                    modulusLength: 2048,
+                    publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
+                    hash: "SHA-256"
+                }, true, ["encrypt", "decrypt"]);
 
-                    // Parse the server's response
-                    if (response.status === 'success') {
-                        // Display the public and private keys returned by the server
-                        showKeys(response.public_key, response.private_key);
-                    } else {
-                        console.error('Server error:', response.error);
-                    }
+                const publicKeyBuffer = await window.crypto.subtle.exportKey("spki", keyPair.publicKey);
+                const privateKeyBuffer = await window.crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+
+                const publicKeyPem = "-----BEGIN PUBLIC KEY-----\n" +
+                    btoa(String.fromCharCode(...new Uint8Array(publicKeyBuffer))).match(/.{1,64}/g).join("\n") +
+                    "\n-----END PUBLIC KEY-----";
+
+                const privateKeyPem = "-----BEGIN PRIVATE KEY-----\n" +
+                    btoa(String.fromCharCode(...new Uint8Array(privateKeyBuffer))).match(/.{1,64}/g).join("\n") +
+                    "\n-----END PRIVATE KEY-----";
+
+                const fileArrayBuffer = await file.arrayBuffer();
+                const fileBytes = new Uint8Array(fileArrayBuffer);
+                const chunkSize = 190;
+                let encryptedChunks = [];
+                for (let i = 0; i < fileBytes.length; i += chunkSize) {
+                    const chunk = fileBytes.slice(i, i + chunkSize);
+                    const encryptedChunk = await window.crypto.subtle.encrypt({ name: "RSA-OAEP" }, keyPair.publicKey, chunk);
+                    encryptedChunks.push(new Uint8Array(encryptedChunk));
                 }
-            } catch (error) {
-                console.error('Error processing files:', error);
+
+                let totalLength = encryptedChunks.reduce((sum, arr) => sum + arr.length, 0);
+                let encryptedData = new Uint8Array(totalLength);
+                let offset = 0;
+                for (const arr of encryptedChunks) {
+                    encryptedData.set(arr, offset);
+                    offset += arr.length;
+                }
+
+                const formData = new FormData();
+                const encryptedBlob = new Blob([encryptedData], { type: 'application/octet-stream' });
+                formData.append('file', encryptedBlob, file.name);
+                formData.append('public_key', publicKeyPem);
+
+                const response = await fetch('/upload', { method: 'POST', body: formData });
+                const result = await response.json();
+                if (result.status === 'success') {
+                // 显示密钥
+                showKeys(publicKeyPem, privateKeyPem);
+                } else {
+                console.error('Upload error:', result.message || result.error);
+                }
             }
         }
 
@@ -196,11 +232,217 @@
             }
         }
 
+                
+        async function openEditor(filename) {
+            const otp = $('#otp').val().trim();
+            const privateKeyPem = $('#secret_key').val().trim();
+            if (!filename || !otp || !privateKeyPem) {
+            alert("Filename, OTP, and key are required to edit.");
+            return;
+            }
+            const formData = new FormData();
+            formData.append('filename', filename);
+            formData.append('otp', otp);
+            try {
+            const res = await fetch('/query_file', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.status === 'success') {
+                const pemHeader = "-----BEGIN PRIVATE KEY-----";
+                const pemFooter = "-----END PRIVATE KEY-----";
+                const pemContents = privateKeyPem.replace(pemHeader, "").replace(pemFooter, "").replace(/\s/g, '');
+                const binaryDer = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
+                const privateKey = await window.crypto.subtle.importKey(
+                "pkcs8",
+                binaryDer.buffer,
+                { name: "RSA-OAEP", hash: "SHA-256" },
+                false,
+                ["decrypt"]
+                );
+                const encryptedBytes = Uint8Array.from(atob(data.file.encrypted_content), c => c.charCodeAt(0));
+                let decryptedChunks = [];
+                for (let i = 0; i < encryptedBytes.length; i += 256) {
+                let chunk = encryptedBytes.slice(i, i + 256);
+                let decryptedChunk = await window.crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, chunk);
+                decryptedChunks.push(new Uint8Array(decryptedChunk));
+                }
+                let totalLen = decryptedChunks.reduce((sum, arr) => sum + arr.length, 0);
+                let decryptedData = new Uint8Array(totalLen);
+                let offset = 0;
+                for (const arr of decryptedChunks) {
+                decryptedData.set(arr, offset);
+                offset += arr.length;
+                }
+                const fileContent = new TextDecoder().decode(decryptedData);
+                // 显示编辑界面
+                const fileList = document.getElementById('fileListContent');
+                fileList.innerHTML = `
+                <h3>Edit File: ${filename}</h3>
+                <label><input type="checkbox" id="reuseKeyCheckbox"> Reuse Old Private Key?</label>
+                <br/><br/>
+                <textarea id="editorTextarea" rows="10" class="form-control">${fileContent}</textarea>
+                <br/>
+                <button id="saveBtn" class="btn btn-primary">Save</button>
+                <button id="cancelBtn" class="btn btn-secondary">Cancel</button>
+                `;
+                // 绑定保存/取消按钮事件
+                $('#saveBtn').on('click', function() {
+                const updatedContent = $('#editorTextarea').val();
+                const reuseKey = $('#reuseKeyCheckbox').prop('checked');
+                saveChanges(filename, updatedContent, otp, reuseKey, privateKeyPem);
+                });
+                $('#cancelBtn').on('click', function() {
+                fileList.innerHTML = '';
+                });
+            } else {
+                alert(`Error retrieving file content: ${data.message}`);
+            }
+            } catch (error) {
+            alert("Failed to load file content for editing");
+            }
+        }
+        // 监听编辑按钮点击，调用openEditor
+        $(document).on('click', '#edit', function(e) {
+            e.preventDefault();
+            const filename = $('#filename').val().trim();
+            openEditor(filename);
+        });
+        
+
+        async function saveChanges(filename, updatedContent, otp, reuseKey, oldPrivateKeyPem) {
+            // 将updatedContent加密
+            let encryptedDataBase64 = "";
+            let newPrivateKeyPem = "";
+            if (reuseKey) {
+            // 重用旧密钥：从私钥导出公钥用于加密
+                const pemHeader = "-----BEGIN PRIVATE KEY-----";
+                const pemFooter = "-----END PRIVATE KEY-----";
+                const pemContents = oldPrivateKeyPem.replace(pemHeader, "").replace(pemFooter, "").replace(/\s/g, '');
+                const binaryDer = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
+                const oldPrivateKey = await window.crypto.subtle.importKey(
+                    "pkcs8",
+                    binaryDer.buffer,
+                    { name: "RSA-OAEP", hash: "SHA-256" },
+                    true,    // 允许导出公钥
+                    ["decrypt"]
+                );
+                const publicKeyBuffer = await window.crypto.subtle.exportKey("spki", oldPrivateKey);
+                const oldPublicKey = await window.crypto.subtle.importKey(
+                    "spki",
+                    publicKeyBuffer,
+                    { name: "RSA-OAEP", hash: "SHA-256" },
+                    false,
+                    ["encrypt"]
+                );
+                // 用旧公钥加密更新内容
+                const contentBytes = new TextEncoder().encode(updatedContent);
+                let encryptedChunks = [];
+                for (let i = 0; i < contentBytes.length; i += 190) {
+                    const chunk = contentBytes.slice(i, i + 190);
+                    const encryptedChunk = await window.crypto.subtle.encrypt({ name: "RSA-OAEP" }, oldPublicKey, chunk);
+                    encryptedChunks.push(new Uint8Array(encryptedChunk));
+                }
+                let totalLen = encryptedChunks.reduce((sum, arr) => sum + arr.length, 0);
+                let encryptedData = new Uint8Array(totalLen);
+                let offset = 0;
+                for (const arr of encryptedChunks) {
+                    encryptedData.set(arr, offset);
+                    offset += arr.length;
+                }
+                encryptedDataBase64 = btoa(String.fromCharCode(...encryptedData));
+            } else {
+            // 不重用旧密钥：生成新的RSA密钥对
+                const newKeyPair = await window.crypto.subtle.generateKey(
+                    {
+                    name: "RSA-OAEP",
+                    modulusLength: 2048,
+                    publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
+                    hash: "SHA-256"
+                    },
+                    true,
+                    ["encrypt", "decrypt"]
+                );
+                // 导出新密钥对（PEM），用于提示用户保存
+                const newPubBuf = await window.crypto.subtle.exportKey("spki", newKeyPair.publicKey);
+                const newPrivBuf = await window.crypto.subtle.exportKey("pkcs8", newKeyPair.privateKey);
+                const newPublicKeyPem = "-----BEGIN PUBLIC KEY-----\n" +
+                    btoa(String.fromCharCode(...new Uint8Array(newPubBuf))).match(/.{1,64}/g).join("\n") +
+                    "\n-----END PUBLIC KEY-----";
+                newPrivateKeyPem = "-----BEGIN PRIVATE KEY-----\n" +
+                    btoa(String.fromCharCode(...new Uint8Array(newPrivBuf))).match(/.{1,64}/g).join("\n") +
+                    "\n-----END PRIVATE KEY-----";
+                // 用新公钥加密更新内容
+                const contentBytes = new TextEncoder().encode(updatedContent);
+                let encryptedChunks = [];
+                for (let i = 0; i < contentBytes.length; i += 190) {
+                    const chunk = contentBytes.slice(i, i + 190);
+                    const encChunk = await window.crypto.subtle.encrypt({ name: "RSA-OAEP" }, newKeyPair.publicKey, chunk);
+                    encryptedChunks.push(new Uint8Array(encChunk));
+                }
+                let totalLen = encryptedChunks.reduce((sum, arr) => sum + arr.length, 0);
+                let encryptedData = new Uint8Array(totalLen);
+                let offset = 0;
+                for (const arr of encryptedChunks) {
+                    encryptedData.set(arr, offset);
+                    offset += arr.length;
+                }
+                encryptedDataBase64 = btoa(String.fromCharCode(...encryptedData));
+                // 将新公钥发送给服务器（服务器目前不使用该值，只记录日志）
+                formData.append('public_key', newPublicKeyPem);
+            }
+            // 调用后端/update_file接口提交加密后的内容
+            const formData = new FormData();
+            formData.append('filename', filename);
+            formData.append('newContent', encryptedDataBase64);
+            formData.append('reuse_key', reuseKey ? 'true' : 'false');
+            formData.append('otp', otp || '');
+            try {
+                const res = await fetch('/update_file', { method: 'POST', body: formData });
+                const data = await res.json();
+                const fileList = document.getElementById('fileListContent');
+                fileList.innerHTML = '';
+                if (data.status === 'success') {
+                    if (reuseKey) {
+                    // 提示使用旧密钥，无需新密钥
+                    const msg = document.createElement('p');
+                    msg.innerText = "File updated successfully (using existing key).";
+                    fileList.appendChild(msg);
+                    } else {
+                    // 显示新私钥给用户保存
+                    const msg = document.createElement('p');
+                    msg.innerText = "Successfully updated file. Below is the NEW private key, save it securely:";
+                    const textArea = document.createElement('textarea');
+                    textArea.rows = 10;
+                    textArea.style.width = "100%";
+                    textArea.value = newPrivateKeyPem;
+                    const copyBtn = document.createElement('button');
+                    copyBtn.innerText = "Copy";
+                    copyBtn.onclick = function() {
+                        textArea.select();
+                        document.execCommand("copy");
+                        alert("New private key copied to clipboard.");
+                    };
+                    fileList.appendChild(msg);
+                    fileList.appendChild(textArea);
+                    fileList.appendChild(copyBtn);
+                    }
+                } else {
+                    alert(`Failed to update file: ${data.message}`);
+                }
+            } catch (error) {
+            alert("Error occurred while updating file.");
+            }
+        }
+
+
         // Display the public and private keys
         function showKeys(publicKey, privateKey) {
             document.getElementById('publicKey').textContent = publicKey;
             document.getElementById('privateKey').textContent = privateKey;
-            new bootstrap.Modal(document.getElementById('keyModal')).show();
+
+            // 明确初始化并显示modal
+            const modalElement = document.getElementById('keyModal');
+            const keyModal = bootstrap.Modal.getOrCreateInstance(modalElement);
+            keyModal.show();
         }
     </script>
 </body>
@@ -246,6 +488,7 @@
                     <button class="btn btn-sm btn-outline-primary" onclick="openEditor('${file.fileid}')">
                         <i class="bi bi-pencil"></i> Edit
                     </button>
+                    
                     <button class="btn btn-sm btn-outline-success" onclick="showSharingOptions('${file.fileid}')">
                         <i class="bi bi-people"></i> Share
                     </button>
@@ -274,6 +517,8 @@
             fileListContent.appendChild(fileItem);
         });
     }
+
+    
 </script>
 
 </html>
