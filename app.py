@@ -295,89 +295,38 @@ def reset_password():
     
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    UPLOAD_FOLDER = './upload/'+session.get('username')+"/"
+    UPLOAD_FOLDER = './upload/' + session.get('username') + "/"
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    try:
-        # Check if file is uploaded
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file uploaded'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
-        
-        # Generate RSA key pair
-        private_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048
-        )
-        public_key = private_key.public_key()
-        
-        # Serialize keys
-        private_key_pem = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption()
-        ).decode('utf-8')
-        
-        public_key_pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        ).decode('utf-8')
-        
-        # Encrypt file data in chunks
-        file_data = file.read()
-        chunk_size = 190  # RSA-OAEP limitation
-        encrypted_chunks = []
-        
-        for i in range(0, len(file_data), chunk_size):
-            chunk = file_data[i:i + chunk_size]
-            encrypted_chunk = public_key.encrypt(
-                chunk,
-                OAEP(
-                    mgf=MGF1(algorithm=hashes.SHA256()),
-                    algorithm=hashes.SHA256(),
-                    label=None
-                )
-            )
-            encrypted_chunks.append(encrypted_chunk)
-        
-        # Combine encrypted chunksfilename = file.filename
-        file_size = len(file.read())  # Get file size in bytes
-        file.seek(0)  # Reset file pointer after reading size
+    # 获取上传文件
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Empty filename'}), 400
+    # 获取前端传来的公钥（服务器此处不做使用）
+    public_key_pem = request.form.get('public_key')
+    # 直接保存加密文件内容
+    file_data = file.read()
+    file_size = len(file_data)
+    username = session.get('username')
+    filename = file.filename  # 原始文件名
+    fileid = generate_file_id(username, filename)
+    save_path = os.path.join(UPLOAD_FOLDER, hashlib.sha256(filename.encode()).hexdigest() + '.enc')
+    with open(save_path, 'wb') as f:
+        f.write(file_data)
+    # 在数据库记录文件信息
+    new_file = files(fileid=fileid,
+                     filename=hashlib.sha256(filename.encode()).hexdigest(),
+                     owner=hashlib.sha256(username.encode()).hexdigest(),
+                     shared_to='',
+                     file_path=save_path,
+                     file_size=file_size)
+    db.session.add(new_file)
+    db.session.commit()
+    create_log(username=username, action="UPLOAD", detail=f"Uploaded file: {filename}")
+    # 返回成功，不再返回密钥对
+    return jsonify({'status': 'success', 'message': 'File uploaded (encrypted by client)'}), 200
 
-        # Generate a unique file ID
-        username = session.get('username')
-        filename = file.filename
-        fileid = generate_file_id(username, filename)
-
-        encrypted_data = b''.join(encrypted_chunks)
-        
-        # Save encrypted file
-
-        save_path = os.path.join(UPLOAD_FOLDER, hashlib.sha256(filename.encode()).hexdigest() + '.enc')
-        with open(save_path, 'wb') as encrypted_file:
-            encrypted_file.write(encrypted_data)
-            new_file = files(
-            fileid=fileid,
-            filename=hashlib.sha256(filename.encode()).hexdigest(),
-            owner=hashlib.sha256(username.encode()).hexdigest(),
-            shared_to='',  # Initially no sharing
-            file_path=save_path,
-            file_size=file_size
-        )
-        db.session.add(new_file)
-        db.session.commit()
-        create_log(username=username, action="UPLOAD", detail=f"Uploaded file: {filename}")#upload log
-        return jsonify({
-            'status': 'success',
-            'message': 'File encrypted and stored securely',
-            'public_key': public_key_pem,
-            'private_key': private_key_pem
-        }), 200
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
     
 # Helper function to generate a unique file ID
 def generate_file_id(username, filename):
@@ -430,26 +379,25 @@ def handle_file_query():
             return jsonify({'status': 'error', 'message': 'No permission to access this file'}), 403
         #读取并解密
         filepath = allowed_file_entry.file_path
-        #change ends
-
         try:
             with open(filepath, 'rb') as enc_file:
                 encrypted_data = enc_file.read()
-            private_key_pem = request.form.get('private_key')
-            file_content = decrypt_file(encrypted_data, private_key_pem)
-
-            return jsonify({'status': 'success',
+            # 将加密二进制内容用Base64编码成字符串，发送给前端
+            encrypted_base64 = base64.b64encode(encrypted_data).decode('utf-8')
+            # 判断当前用户是否为owner，用于前端界面控制
+            is_owner = (allowed_file_entry.owner == hashlib.sha256(username.encode()).hexdigest())
+            return jsonify({
+                'status': 'success',
                 'file': {
                     'filename': filename,
-                    'owner': username,  # 前端看起来是谁在查询
-                    'file_size': len(file_content),
-                    'file_content': file_content
-                }}), 200
+                    'owner': username,  # 当前查看的用户（保持原逻辑）
+                    'file_size': allowed_file_entry.file_size,
+                    'encrypted_content': encrypted_base64
+                },
+                'is_owner': is_owner
+            }), 200
         except Exception as e:
-            return jsonify({
-                'status': 'error',
-                'message': f'Error reading or decrypting file: {str(e)}'
-            })
+            return jsonify({'status': 'error', 'message': f'Error reading file: {e}'}), 500
 
     except Exception as e:
         return jsonify({
@@ -579,147 +527,43 @@ def admin_dashboard():
 def update_file():
     try:
         filename = request.form.get('filename')
-        newContent = request.form.get('newContent')
-        # 前端是否提交了 OTP 等二次校验
-        otp = request.form.get('otp', None)
-
-        reuseKeyFlag = request.form.get('reuse_key')  # 传 'true'/'false' 或 'yes'/'no' 均可
-
-        if not all([filename, newContent, reuseKeyFlag]):
-            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
-
-        username = session.get('username')
-        if not username:
-            return jsonify({'status': 'error', 'message': 'Not logged in'}), 401
-
-        user = User.query.filter_by(username=username).first()
-        if not user:
-            return jsonify({'status': 'error', 'message': 'User not found in session'}), 404
-
+        new_content_b64 = request.form.get('newContent')  # 前端加密后的内容（Base64）
+        reuse_flag = request.form.get('reuse_key')
+        # 验证参数
+        if not filename or new_content_b64 is None or reuse_flag is None:
+            return jsonify({'status': 'error', 'message': 'Missing required data'}), 400
+        # 查找对应文件记录（通过哈希文件名匹配）
         hashed_filename = hashlib.sha256(filename.encode()).hexdigest()
         candidate_files = files.query.filter_by(filename=hashed_filename).all()
         if not candidate_files:
             return jsonify({'status': 'error', 'message': 'File not found!'}), 404
-
-        hashed_current_user = hashlib.sha256(username.encode()).hexdigest()
+        hashed_current_user = hashlib.sha256(session.get('username').encode()).hexdigest()
         allowed_file_entry = None
         for f in candidate_files:
-            share_list = f.shared_to.split(',') if f.shared_to else []
-            # 只要是文件owner或在分享列表里，就能编辑
-            if (f.owner == hashed_current_user) or (username in share_list):
+            # 只有文件拥有者可以编辑，分享用户跳过
+            if f.owner == hashed_current_user:
                 allowed_file_entry = f
                 break
         if not allowed_file_entry:
             return jsonify({'status': 'error', 'message': 'No permission to edit this file'}), 403
-
-        if reuseKeyFlag.lower() == 'true':
-            # 用户想沿用原先的私钥
-            old_private_key_pem = request.form.get('old_private_key')
-            if not old_private_key_pem:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'You chose to reuse old key, but no old_private_key provided!'
-                }), 400
-
-            try:
-                # 用旧私钥推导出公钥
-                private_key = serialization.load_pem_private_key(
-                    old_private_key_pem.encode('utf-8'),
-                    password=None
-                )
-            except Exception as e:
-                return jsonify({'status': 'error', 'message': f'Invalid old private key: {str(e)}'}), 400
-
-            public_key = private_key.public_key()
-
-            file_data = newContent.encode('utf-8')
-            chunk_size = 190
-            encrypted_chunks = []
-            for i in range(0, len(file_data), chunk_size):
-                chunk = file_data[i:i + chunk_size]
-                enc = public_key.encrypt(
-                    chunk,
-                    OAEP(
-                        mgf=MGF1(algorithm=hashes.SHA256()),
-                        algorithm=hashes.SHA256(),
-                        label=None
-                    )
-                )
-                encrypted_chunks.append(enc)
-            encrypted_data = b''.join(encrypted_chunks)
-
-            # 覆盖写回
-            save_path = allowed_file_entry.file_path
-            with open(save_path, 'wb') as f:
-                f.write(encrypted_data)
-
-            # 记录日志
-            create_log(username=username, action="EDIT", detail=f"Edited file (reuse old key): {filename}")
-
-            updated_public_key_pem = public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
-            ).decode('utf-8')
-
-            return jsonify({
-                'status': 'success',
-                'message': f"File '{filename}' updated successfully using old key",
-                'public_key': updated_public_key_pem,
-                # 'private_key': old_private_key_pem, # 用户自己已有，可不再返回
-            }), 200
-
+        # 将Base64的加密内容解码为二进制数据
+        try:
+            new_encrypted_data = base64.b64decode(new_content_b64)
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': 'Invalid encrypted data'}), 400
+        # 覆盖写入文件
+        save_path = allowed_file_entry.file_path
+        with open(save_path, 'wb') as f:
+            f.write(new_encrypted_data)
+        # 记录编辑日志
+        if reuse_flag.lower() == 'true':
+            create_log(username=session.get('username'), action="EDIT", detail=f"Edited file (reuse old key): {filename}")
         else:
-            # 用户不想沿用旧私钥 => 生成新的公私钥
-            new_private_key = rsa.generate_private_key(
-                public_exponent=65537,
-                key_size=2048
-            )
-            new_public_key = new_private_key.public_key()
-
-            # 用新公钥加密
-            file_data = newContent.encode('utf-8')
-            chunk_size = 190
-            encrypted_chunks = []
-            for i in range(0, len(file_data), chunk_size):
-                chunk = file_data[i:i + chunk_size]
-                enc = new_public_key.encrypt(
-                    chunk,
-                    OAEP(
-                        mgf=MGF1(algorithm=hashes.SHA256()),
-                        algorithm=hashes.SHA256(),
-                        label=None
-                    )
-                )
-                encrypted_chunks.append(enc)
-            encrypted_data = b''.join(encrypted_chunks)
-
-            # 覆盖写回
-            save_path = allowed_file_entry.file_path
-            with open(save_path, 'wb') as f:
-                f.write(encrypted_data)
-
-            # 记录日志
-            create_log(username=username, action="EDIT", detail=f"Edited file (generated new key): {filename}")
-
-            new_private_key_pem = new_private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption()
-            ).decode('utf-8')
-            new_public_key_pem = new_public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
-            ).decode('utf-8')
-
-            return jsonify({
-                'status': 'success',
-                'message': f"File '{filename}' updated successfully with a new key pair",
-                'public_key': new_public_key_pem,
-                'private_key': new_private_key_pem
-            }), 200
-
+            create_log(username=session.get('username'), action="EDIT", detail=f"Edited file (generated new key): {filename}")
+        return jsonify({'status': 'success', 'message': f"File '{filename}' updated successfully"}), 200
     except Exception as e:
-        return jsonify({'status': 'error', 'message': f'Error updating file: {str(e)}'}), 500
+        return jsonify({'status': 'error', 'message': f'Error updating file: {e}'}), 500
+
 
 
 if __name__ == '__main__':
