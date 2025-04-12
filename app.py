@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 from sqlite3 import IntegrityError
 import sqlite3
 from flask import Flask, session,request, jsonify, render_template
@@ -92,7 +93,7 @@ def login_page():
 def registerhtml():
     return render_template('register.html')
 # 注册页面
-@app.route('/register_spqce', methods=['POST'])  # Check if URL should be '/register_space'
+@app.route('/register_spqce', methods=['POST'])  # use post
 def register():
     if request.method == 'POST':
         # Add repassword retrieval
@@ -101,14 +102,16 @@ def register():
         repassword = request.form.get('repassword')  # Added missing field
         email = request.form.get('email')
         role = request.form.get('role')
-
+        if len(password) < 8:
+            return jsonify({'status': 'error', 'message': 'Password must be at least 8 characters long.'}), 400
+        # Check if password contains a digit, a letter, and a special character
+        if not (re.search(r'\d', password) and re.search(r'[a-zA-Z]', password) and re.search(r'[\W_]', password)):
+            return jsonify({'status': 'error', 'message': 'Password must contain at least one digit, one letter, and one special character.'}), 400
         # Validate all required fields
         if not all([username, password, repassword, email, role]):
-            return jsonify({'status': 'error', 'message': 'All fields are required!'}), 400
-            
+            return jsonify({'status': 'error', 'message': 'All fields are required!'}), 400          
         if password != repassword:
-            return jsonify({'status': 'error', 'message': 'Passwords do not match!'}), 400
-            
+            return jsonify({'status': 'error', 'message': 'Passwords do not match!'}), 400          
         if role not in ['user', 'admin']:
             return jsonify({'status': 'error', 'message': 'Invalid role selected!'}), 400
         
@@ -138,23 +141,20 @@ def register():
             db.session.rollback()
             return jsonify({'status': 'error', 'message': 'Username/email already exists!'}), 400
 
-# 登录页面
+# login check
 @app.route('/login_check', methods=['POST'])
 def login():
     if request.method == 'POST':
         # Match frontend field names
-        username = request.form.get('username')  # Changed from 'userid'
+        username = request.form.get('username') 
         password = request.form.get('password')
-
         if not username or not password:
             return jsonify({
                 "status": "error",
                 "message": "Both fields are required"
             }), 400
-
         try:
-            user = User.query.filter_by(username=username).first()
-            
+            user = User.query.filter_by(username=username).first()          
             # Enhanced password verification
             if user and bcrypt.check_password_hash(user.password, password):
                 session['username'] = user.username
@@ -186,17 +186,17 @@ def login():
                 "status": "error",
                 "message": "Server error"
             }), 500
+#To generate OTP, we use pyotp and qrcode libraries
 def generate_otp(user):
-    # 生成随机密钥
+    # generate a random base32 secret key
     otp_secret = pyotp.random_base32()
     
-    # 构建标准URI
+    # ftech the provisioning URI for the OTP
     provisioning_uri = pyotp.totp.TOTP(otp_secret).provisioning_uri(
         name=user,
         issuer_name="Your App Name"
     )
     
-    # 生成二维码图像
     qr = qrcode.make(provisioning_uri)
     
     return otp_secret, provisioning_uri
@@ -257,32 +257,33 @@ def otp_setting():
 @app.route('/reset-password', methods=['POST'])
 def reset_password():
     try:
-        # 获取表单数据
+        # get data from frontend
         username = request.form.get('username')
         email = request.form.get('email')
         otp = request.form.get('otp')
         new_password = request.form.get('newPassword')
         confirm_password = request.form.get('confirmPassword')
 
-        # 验证输入是否完整
+        # check if all fields are filled
         if not all([username, email, otp, new_password, confirm_password]):
             return jsonify({'status': 'error', 'message': 'All fields are required!'}), 400
 
-        # 验证新密码和确认密码是否一致
+        # verify password 
         if new_password != confirm_password:
             return jsonify({'status': 'error', 'message': 'Passwords do not match!'}), 400
 
-        # 查找用户
+        # find user in database
         user = User.query.filter_by(username=username, email=email).first()
         if not user:
             return jsonify({'status': 'error', 'message': 'User not found!'}), 404
 
-        # 验证 OTP
+        # veirfy OTP
         totp = pyotp.TOTP(user.otp_secret)
         if not totp.verify(otp):
             return jsonify({'status': 'error', 'message': 'Invalid OTP!'}), 400
 
-        # 更新密码
+        # update password
+        # Hash the new password and update it in the database
         hashed_password = bcrypt.generate_password_hash(new_password).decode('utf-8')
         user.password = hashed_password
         db.session.commit()
@@ -297,24 +298,24 @@ def reset_password():
 def upload_file():
     UPLOAD_FOLDER = './upload/' + session.get('username') + "/"
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    # 获取上传文件
+    # get file from request
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': 'Empty filename'}), 400
-    # 获取前端传来的公钥（服务器此处不做使用）
+    # get public key
     public_key_pem = request.form.get('public_key')
-    # 直接保存加密文件内容
+    # directly save the file to disk
     file_data = file.read()
     file_size = len(file_data)
     username = session.get('username')
-    filename = file.filename  # 原始文件名
+    filename = file.filename  # original filename
     fileid = generate_file_id(username, filename)
     save_path = os.path.join(UPLOAD_FOLDER, hashlib.sha256(filename.encode()).hexdigest() + '.enc')
     with open(save_path, 'wb') as f:
         f.write(file_data)
-    # 在数据库记录文件信息
+    # store file info in database
     new_file = files(fileid=fileid,
                      filename=hashlib.sha256(filename.encode()).hexdigest(),
                      owner=hashlib.sha256(username.encode()).hexdigest(),
@@ -324,7 +325,7 @@ def upload_file():
     db.session.add(new_file)
     db.session.commit()
     create_log(username=username, action="UPLOAD", detail=f"Uploaded file: {filename}")
-    # 返回成功，不再返回密钥对
+    # success response
     return jsonify({'status': 'success', 'message': 'File uploaded (encrypted by client)'}), 200
 
     
@@ -349,42 +350,30 @@ def handle_file_query():
             return jsonify({'status': 'error', 'message': 'Invalid OTP!'})
         hashed_filename = hashlib.sha256(filename.encode()).hexdigest()# Hash filename
 
-#       hashed_owner = hashlib.sha256(username.encode()).hexdigest()
-#       filesid = generate_file_id(username, filename)
-#       # Query file information
-#       file_entry = files.query.filter_by(fileid=filesid).first()
-#       if not file_entry:
-#           return jsonify({'status': 'error', 'message': 'File not found!'})
-
-#       # Check ownership or sharing permissions
-#       if file_entry.owner == hashed_owner or username in file_entry.share_to.split(','):
-#           # Return file content
-#           filepath = file_entry.file_path
-
         #change starts
         candidate_files = files.query.filter_by(filename=hashed_filename).all()
         if not candidate_files:
             return jsonify({'status': 'error', 'message': 'File not found!'}), 404
-        #遍历 candidate_files，看有没有用户可访问的
+        #Traverse candidate_files to see if there is any user accessible
         hashed_current_user = hashlib.sha256(username.encode()).hexdigest()
         allowed_file_entry = None
         for f in candidate_files:
-            # 如果 f.owner 是当前用户自己，或者 username 在 shared_to
+            # If f.owner is the current user, or username is in shared_to
             share_list = f.shared_to.split(',') if f.shared_to else []
             if (f.owner == hashed_current_user) or (username in share_list):
-                # 找到了一个用户有权限访问的文件
+                # A file was found that the user has permission to access.
                 allowed_file_entry = f
                 break
         if not allowed_file_entry:
             return jsonify({'status': 'error', 'message': 'No permission to access this file'}), 403
-        #读取并解密
+        #Read and decrypt
         filepath = allowed_file_entry.file_path
         try:
             with open(filepath, 'rb') as enc_file:
                 encrypted_data = enc_file.read()
-            # 将加密二进制内容用Base64编码成字符串，发送给前端
+            # Encode the encrypted binary content into a string using Base64 and send it to the front end
             encrypted_base64 = base64.b64encode(encrypted_data).decode('utf-8')
-            # 判断当前用户是否为owner，用于前端界面控制
+            # Determine whether the current user is the owner, used for front-end interface control
             is_owner = (allowed_file_entry.owner == hashlib.sha256(username.encode()).hexdigest())
             return jsonify({
                 'status': 'success',
@@ -529,10 +518,10 @@ def update_file():
         filename = request.form.get('filename')
         new_content_b64 = request.form.get('newContent')  # 前端加密后的内容（Base64）
         reuse_flag = request.form.get('reuse_key')
-        # 验证参数
+        # Validation parameters
         if not filename or new_content_b64 is None or reuse_flag is None:
             return jsonify({'status': 'error', 'message': 'Missing required data'}), 400
-        # 查找对应文件记录（通过哈希文件名匹配）
+        # Find the corresponding file record (by hash file name matching)
         hashed_filename = hashlib.sha256(filename.encode()).hexdigest()
         candidate_files = files.query.filter_by(filename=hashed_filename).all()
         if not candidate_files:
@@ -540,22 +529,22 @@ def update_file():
         hashed_current_user = hashlib.sha256(session.get('username').encode()).hexdigest()
         allowed_file_entry = None
         for f in candidate_files:
-            # 只有文件拥有者可以编辑，分享用户跳过
+            # Only the file owner can edit it, shared users can skip it
             if f.owner == hashed_current_user:
                 allowed_file_entry = f
                 break
         if not allowed_file_entry:
             return jsonify({'status': 'error', 'message': 'No permission to edit this file'}), 403
-        # 将Base64的加密内容解码为二进制数据
+        # Decode Base64 encrypted content into binary data
         try:
             new_encrypted_data = base64.b64decode(new_content_b64)
         except Exception as e:
             return jsonify({'status': 'error', 'message': 'Invalid encrypted data'}), 400
-        # 覆盖写入文件
+        # Overwrite a file
         save_path = allowed_file_entry.file_path
         with open(save_path, 'wb') as f:
             f.write(new_encrypted_data)
-        # 记录编辑日志
+        # Record edit log
         if reuse_flag.lower() == 'true':
             create_log(username=session.get('username'), action="EDIT", detail=f"Edited file (reuse old key): {filename}")
         else:

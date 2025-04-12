@@ -116,7 +116,7 @@
                                 <input type="text" class="form-control" id="otp" placeholder="Enter OTP" required>
                             </div>
                             <div class="mb-3">
-                                <label for="secret_key" class="form-label">OTP</label>
+                                <label for="secret_key" class="form-label">Enter private key</label>
                                 <textarea type="text" class="form-control" id="secret_key" placeholder="Enter secret key" required></textarea>
                             </div>
                             <button id="query" class="btn btn-primary">Query</button>
@@ -137,7 +137,7 @@
         function handleDragOver(event) {
             event.preventDefault();
             event.stopPropagation();
-            event.currentTarget.classList.add('dragover'); // 添加视觉反馈
+            event.currentTarget.classList.add('dragover'); 
         }
         document.getElementById('fileInput').addEventListener('change', async (e) => {
             if (e.target.files.length > 0) {
@@ -154,10 +154,10 @@
                 await processFiles(files);
             }
         }
-        // 处理文件上传，加密后再上传
+        // Process file uploads and encrypt them before uploading
         async function processFiles(files) {
             for (const file of files) {
-                // 生成 RSA 密钥对
+                // Generate an RSA key pair
                 const keyPair = await window.crypto.subtle.generateKey({
                     name: "RSA-OAEP",
                     modulusLength: 2048,
