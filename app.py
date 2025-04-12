@@ -213,7 +213,7 @@ def otp_page():
         username = session.get('username'),
         provisioning_uri = session.get('provisioning_uri')
     )
-@app.route('/otp_setting', methods=['GET', 'POST'])
+@app.route('/otp_setting', methods=['POST'])
 def otp_setting():
     error = None
     username = session.get('username')
