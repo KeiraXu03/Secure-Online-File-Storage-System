@@ -116,7 +116,7 @@
                                 <input type="text" class="form-control" id="otp" placeholder="Enter OTP" required>
                             </div>
                             <div class="mb-3">
-                                <label for="secret_key" class="form-label">Enter private key</label>
+                                <label for="secret_key" class="form-label">OTP</label>
                                 <textarea type="text" class="form-control" id="secret_key" placeholder="Enter secret key" required></textarea>
                             </div>
                             <button id="query" class="btn btn-primary">Query</button>
@@ -137,7 +137,7 @@
         function handleDragOver(event) {
             event.preventDefault();
             event.stopPropagation();
-            event.currentTarget.classList.add('dragover'); 
+            event.currentTarget.classList.add('dragover'); // 添加视觉反馈
         }
         document.getElementById('fileInput').addEventListener('change', async (e) => {
             if (e.target.files.length > 0) {
@@ -154,10 +154,10 @@
                 await processFiles(files);
             }
         }
-        // Process file uploads and encrypt them before uploading
+        // 处理文件上传，加密后再上传
         async function processFiles(files) {
             for (const file of files) {
-                // Generate an RSA key pair
+                // 生成 RSA 密钥对
                 const keyPair = await window.crypto.subtle.generateKey({
                     name: "RSA-OAEP",
                     modulusLength: 2048,
@@ -285,7 +285,7 @@
                 <button id="cancelBtn" class="btn btn-secondary">Cancel</button>
                 `;
                 // 绑定保存/取消按钮事件
-                $('#saveBtn').on('click', function() {
+                $(document).on('click', '#saveBtn', function(){
                 const updatedContent = $('#editorTextarea').val();
                 const reuseKey = $('#reuseKeyCheckbox').prop('checked');
                 saveChanges(filename, updatedContent, otp, reuseKey, privateKeyPem);
@@ -312,6 +312,7 @@
             // 将updatedContent加密
             let encryptedDataBase64 = "";
             let newPrivateKeyPem = "";
+            const formData = new FormData();
             if (reuseKey) {
             // 重用旧密钥：从私钥导出公钥用于加密
                 const pemHeader = "-----BEGIN PRIVATE KEY-----";
@@ -390,7 +391,6 @@
                 formData.append('public_key', newPublicKeyPem);
             }
             // 调用后端/update_file接口提交加密后的内容
-            const formData = new FormData();
             formData.append('filename', filename);
             formData.append('newContent', encryptedDataBase64);
             formData.append('reuse_key', reuseKey ? 'true' : 'false');
