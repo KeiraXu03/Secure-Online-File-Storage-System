@@ -33,14 +33,14 @@ db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 Session(app)
-# 数据库模型
+# datebase model
 class User(db.Model):
     username = db.Column(db.String(80), unique=True, primary_key=True)
     password = db.Column(db.String(200), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     role = db.Column(db.String(20), nullable=False)
     otp_secret=db.Column(db.String(120), unique=True, nullable=False)
-    mfa_enabled = db.Column(db.Boolean, default=False)  # 是否启用 MFA
+    mfa_enabled = db.Column(db.Boolean, default=False)  
     def __repr__(self):
         return f'<User {self.username}>'
 class files(db.Model):
@@ -74,7 +74,7 @@ def create_log(username, action, detail=""): #write log
     db.session.add(new_log)
     db.session.commit()
 
-# 首页
+# homepage
 @app.route('/')
 def hello():
     return render_template('login.html')
@@ -298,7 +298,7 @@ def reset_password():
 def upload_file():
     UPLOAD_FOLDER = './upload/' + session.get('username') + "/"
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    # 获取上传文件
+    # fetch file from request
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     file = request.files['file']
@@ -316,7 +316,6 @@ def upload_file():
     with open(save_path, 'wb') as f:
         f.write(file_data)
     # return file information
-    # 计算文件的 SHA-256 哈希值
     new_file = files(fileid=fileid,
                      filename=hashlib.sha256(filename.encode()).hexdigest(),
                      owner=hashlib.sha256(username.encode()).hexdigest(),
@@ -566,4 +565,3 @@ if __name__ == '__main__':
     # Make sure to create the database in the application context
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
